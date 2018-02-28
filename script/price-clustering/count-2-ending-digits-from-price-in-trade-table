@@ -1,0 +1,45 @@
+#!/usr/bin/env perl
+
+use 5.010001;
+use strict;
+use warnings;
+
+use Data::Dump;
+use DBIx::Connect::MySQL;
+use Progress::Any '$progress';
+use Progress::Any::Output 'TermProgressBarColor';
+
+my $dbh = DBIx::Connect::MySQL->connect(
+    "dbi:mysql:database=mtgox", undef, undef
+);
+
+my $row_where = " WHERE Type='sell' AND User_Country IN ('CN','HK','TW')";
+
+$progress->target($dbh->selectrow_arrayref("SELECT COUNT(*) FROM Trade$row_where")->[0]);
+
+my $sth = $dbh->prepare("SELECT ROUND(Money/Bitcoins, 4) AS Price FROM Trade$row_where");
+$sth->execute;
+
+my %digits;
+while (my $row = $sth->fetchrow_hashref) {
+    $progress->update;
+    $row->{Price} =~ /(\d\d)$/ and $digits{$1}++;
+}
+
+$progress->finish;
+
+my $tot = 0;
+for (keys %digits) { $tot += $digits{$_} }
+
+# display the 10 most common endings
+my $i = 0;
+for (sort {$digits{$b} <=> $digits{$a}} keys %digits) {
+    #next if $i++ > 10;
+    printf "%s  %10d (%6.2f%%)\n", $_, $digits{$_}, $digits{$_}/$tot*100;
+}
+
+=head1 RESULT
+
+Slightly more 8 than 4 observed more in 'sell' than 'buy' in Chinese.
+
+=head2 Type='sell' AND User_Country IN ('CN','TW','HK') (4 decimal places)

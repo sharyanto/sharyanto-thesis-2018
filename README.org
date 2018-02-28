@@ -1,0 +1,20 @@
+* About this document
+
+This document is written in Org format. To view this properly, use Emacs (with
+org-mode installed) or view it on GitHub, or use other suitable viewers.
+However, much like Markdown, this document is quite readable in plain text. See
+https://orgmode.org for more details.
+
+* About this repository
+
+This repository contains data, scripts, and other supplementary materials for my
+thesis/research article "Trader behavior in the cryptocurrency markets: case of
+Mt. Gox bitcoin exchange".
+
+Author: Steven Haryanto, Universitas Indonesia.
+
+Copyright (c) 2018 Steven Haryanto.
+
+License: All software created by me (files in the script/ directory) are
+released under the Artistic License. All non-software work created by me are
+licensed under a Creative Commons Attribution 4.0 International License.

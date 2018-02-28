@@ -1,0 +1,113 @@
+#!/usr/bin/env perl
+
+use 5.010001;
+use strict;
+use warnings;
+
+use Data::Dump;
+use DBIx::Connect::MySQL;
+use Progress::Any '$progress';
+use Progress::Any::Output 'TermProgressBarColor';
+
+my $dbh = DBIx::Connect::MySQL->connect(
+    "dbi:mysql:database=mtgox", undef, undef
+);
+
+my $row_where = " WHERE Type='sell' AND User_Country IN ('CN','HK','TW')";
+
+$progress->target($dbh->selectrow_arrayref("SELECT COUNT(*) FROM Trade$row_where")->[0]);
+
+my $sth = $dbh->prepare("SELECT ROUND(Money/Bitcoins, 4) AS Price FROM Trade$row_where");
+$sth->execute;
+
+my %digits;
+while (my $row = $sth->fetchrow_hashref) {
+    $progress->update;
+    for (split //, $row->{Price}) {
+        next unless /[0-9]/;
+        $digits{$_}++;
+    }
+}
+
+$progress->finish;
+
+dd \%digits;
+
+=head1 RESULT
+
+Slightly more 8 than 4 observed more in 'sell' than 'buy' in Chinese.
+
+=head2 Type='buy'  (4 decimal places) [note: include bots/special]
+
+{
+  "0" => 4151063,
+  "1" => 9026742,
+  "2" => 5031089,
+  "3" => 4587204,
+  "4" => 4608174,
+  "5" => 4799161,
+  "6" => 3873286,
+  "7" => 3879630,
+  "8" => 4131001,
+  "9" => 5474371,
+}
+
+=head2 Type='buy' AND User_Country IN ('CN','HK','TW')  (4 decimal places)
+
+{
+  "0" => 115022,
+  "1" => 277583,
+  "2" => 123833,
+  "3" => 116366,
+  "4" => 94193,
+  "5" => 97955,
+  "6" => 74469,
+  "7" => 82298,
+  "8" => 93868,
+  "9" => 138245,
+}
+
+=head2 Type='buy' AND User_Country IN ('CN')  (4 decimal places)
+
+{
+  "0" => 105028,
+  "1" => 254967,
+  "2" => 113533,
+  "3" => 107556,
+  "4" => 86655,
+  "5" => 88860,
+  "6" => 68197,
+  "7" => 74800,
+  "8" => 85834,
+  "9" => 125608,
+}
+
+=head2 Type='sell' AND User_Country IN ('CN')  (4 decimal places)
+
+{
+  "0" => 105048,
+  "1" => 254411,
+  "2" => 112318,
+  "3" => 102610,
+  "4" => 82595,
+  "5" => 91326,
+  "6" => 72177,
+  "7" => 71910,
+  "8" => 84709,
+  "9" => 126230,
+}
+
+=head2 Type='sell' AND User_Country IN ('CN','HK','TW')
+
+{
+  "0" => 301480,
+  "1" => 641622,
+  "2" => 344608,
+  "3" => 323326,
+  "4" => 282525,
+  "5" => 293127,
+  "6" => 255670,
+  "7" => 259380,
+  "8" => 273579,
+  "9" => 320568,
+}

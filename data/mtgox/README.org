@@ -1,0 +1,206 @@
+* About this document
+
+This document is written in Org format. To view this properly, use Emacs (with
+org-mode installed) or view it on GitHub, or use other suitable viewers.
+However, much like Markdown, this document is quite readable in plain text. See
+https://orgmode.org for more details.
+
+* About the Mt. Gox data
+
+On Mar 9, 2014, it was [[https://techcrunch.com/2014/03/09/mt-gox-hack-allegedly-reveals-bitcoin-balances-customer-account-totals/][reported]] that hackers have defaced Mt. Gox CEO Mark
+Karpeles' blog and have uploaded a database dump of consumer data that,
+according to users with account on the site, is accurate.
+
+The database dump was uploaded with the name MtGox2014Leak.zip. It contains 3 kinds of information:
+
+- user's bitcoin & fiat balances (with the user identification already
+  anonymized);
+- individual trade (buy/sell) transactions from Apr 1, 2011 to Nov 30, 2013
+  (~139 weeks);
+- bitcoin withdrawal/deposit information.
+
+Some discussion about the data dump: [[https://bitcointalk.org/index.php?topic=508249][1]], [[https://www.reddit.com/r/mtgoxinsolvency/comments/1zz9fe/unconfirmed_mtgox_2014_data_leak/][2]].
+
+A copy of the file with the same name was downloaded from
+http://cryptoanarchic.me/goxhax/ on 2018-02-12. It was the only source for the
+.zip file that I could find online by this time.
+
+Note that it has also been reported that this .zip file contains Windows
+executables with suspicious code so it is best to avoid opening that file or
+open the whole .zip archive in a virtual machine to limit potential damage.
+
+(The actual file is not included in this repository, but available upon
+request.)
+
+To import the Mt. Gox data into MySQL database, run the provided
+~script/import-balances~ followed by ~script/import-trades~ followed by
+executing ~script/extra.sql~. More details in the following sections.
+
+* General
+
+** Timezone
+
+There are no timezone information for the timestamps, either in the balances
+data dump nor the trade .CSV files. Nor does [[https://willyreport.wordpress.com][The Willy Report]] mention about time
+zone. But a [[http://blog.wizsec.jp/2015/02/mtgox-investigation-release.html][follow up study]] seems to indicate that the timestamps are in UTC.
+
+** The Index and User__ columns
+
+There are three columns that seem to associate balance or transaction with
+account/user: Index, User__, and User_Id_Hash. User_Id_Hash looks like some form
+of hash of User__: each unique User__ maps to another unique User_Id_Hash. So
+for the purpose of identifying user, we will only take a look at Index and/or
+User__ columns.
+
+At a glance, the Index column looks like it represents a numeric account ID just
+like the User__ and User_Id_Hash columns (which are longer, less convenient, hex
+GUIDs), but a closer look reveals that Index values are not unique for different
+users/accounts.
+
+In the User_Wallet table, a total of 1880 Index'es are associated with two or
+more User__'s. In fact, some low-value Index (<= 40) are each associated with
+thousands of different User__'s.
+
+In the Trade table, a total of 75 Index values (all low-value Index'es, <= 628)
+are associated with two different User__'s.
+
+Unfortunately, not all trade data include User__ information; some only contain
+the Index. Earlier trade data (from Apr 1, 2011 to as late as Apr 16, 2013
+05:24:05 UTC) only include Index, while latter trade data (as early as Nov 1,
+2012 00:00:48 UTC to the latest on Nov 30, 2013) include User__. So we have a
+contiguous period between Apr 16, 2013 to Nov 30, 2013 (~32 weeks) where the
+users are identified by User__ and that is the period we will use when we are
+categorizing users.
+
+* The balances data (User_Wallet table)
+
+The user balances are in the mtgox_balances (an output of "mysql" command-line
+session) inside the .zip file. I have provided ~script/import-balances~ to
+import this back into a MySQL table.
+
+The following is the list of columns of the 'User_Wallet' table and a few sample
+records:
+
+: +--------------------------------------+--------------------------------------+------------+---------------+-------------+---------+---------+----------------------+------------------------+----------------+---------------------+
+: | User_wallet__                        | User__                               | Currency__ | Balance       | Liabilities | Index   | Backend | Daily_Withdraw_Limit | Monthly_Withdraw_Limit | Disable_Limits | Stamp               |
+: +--------------------------------------+--------------------------------------+------------+---------------+-------------+---------+---------+----------------------+------------------------+----------------+---------------------+
+: | 5c05557d-8d1e-4e2a-9a24-21781413be32 | 711a4e9d-e183-4bec-a390-340918326538 | BTC        | 4454767562508 |           0 |  156624 | virtual |                    0 |                   NULL | N              | 2012-07-13 06:58:01 |
+: | a6acd802-bb4f-412b-be6d-b0bf3f2bb055 | 34fcda44-5832-48c3-8beb-60f1bd9fef37 | BTC        | 4376817697344 |           0 |   42208 | virtual |        2000000000000 |                   NULL | N              | 2014-02-25 03:53:01 |
+: | 221d365a-ce33-4619-a8fb-f79514940bb1 | c0b24126-f199-4cc6-83fc-c96f2bcb9381 | BTC        | 1998500000000 |           0 |       4 | virtual |                    0 |                   NULL | N              | 2012-08-11 10:30:00 |
+: | 2ae40a68-c862-4fd3-8ebc-a05a7e0fbfac | 92d047e9-9f2b-4dd0-9163-077db3e56dd0 | BTC        | 1150063956592 |           0 |     253 | virtual |                 NULL |                   NULL | N              | 2013-11-26 02:35:25 |
+: | 1ad3f250-17dc-4d3d-9aff-15f3ed40cec9 | ff84fc35-b22a-492d-b8f2-5fb79be170a7 | BTC        | 1100781000685 |           0 |    3941 | virtual |                 NULL |                   NULL | N              | 2014-02-20 22:30:51 |
+: | 166c11b8-f2b3-4302-a21d-c2c706994447 | 0afba433-817e-49d4-a72f-0576c660861b | BTC        |  981919410221 |           0 |    6752 | virtual |        1000000000000 |                   NULL | N              | 2014-02-24 18:41:47 |
+: | f070b09c-f046-4bf2-889d-cb9defcce7fd | 19b38844-b58b-4d1b-8ba1-af2e45b164f7 | BTC        |  875255455182 |           0 |   32579 | virtual |        1000000000000 |                   NULL | N              | 2014-02-24 03:13:22 |
+
+The bitcoin balances are in satoshis (1E8), JPY and SEK are 1E3, all other fiat
+is 1E5 ([[https://www.reddit.com/r/Bitcoin/comments/1zzwz1/look_up_your_mtgox_balances/cfyjlsp/][ref]]).
+
+** Summary statistics
+
+After importing, the table contains 189,373 rows representing 189,373 separate
+wallets of 128,166 unique users (User__) and 3663 unique Index'es.
+
+* The trade data (Trade table)
+
+Trade data are in *.csv (total 61+0 = 62 files) in the trades.zip inside the
+MtGox2014Leak.zip. The *.csv files in total contain ~22.17 million rows, but
+some of rows these files are duplicate. And in the latest file, a couple lines
+are corrupt (a merged line and a truncated line).
+
+** Date range
+
+The trade data are dated from Apr 1, 2011 00:28:54 UTC to Nov 30, 2013 23:59:55
+UTC.
+
+** Formats
+
+There are actually two different formats of the .csv files. The earlier format
+contains these columns:
+
+: Id, Stamp, Index, Japan, Type, Currency__, Bitcoins, Money, Money_Rate, Money_Jpy, Money_Fee, Money_Fee_Rate, Money_Fee_Jpy, Bitcoin_Fee, Bitcoin_Fee_Jpy, User_Country, User_State
+
+While the latter format has two additional columns after the ~Index~ column:
+
+: User__, User_Id_Hash
+
+For more details about the columns, see the ~script/import-trades~ script.
+
+** Deduplication
+
+There are some approaches of removing the duplicates. [[Feder, A., Gandal, N.,
+Hamrick, J. T., & Moore, T. (2018)]] presents two forms of deduplication: 1) by
+treating (user ID, timestamp, transaction type, amount in BTC, amount in
+Japanese Yen) tuple as unique; 2) by treating (user ID, timestamp, transaction
+type, amount in BTC) tuple as unique. Method 2) is more aggresive than 1). Using
+the first method, they remove some ~4 million transactions.
+
+Note that the number of transactions reported in this paper is different (~18
+millions pre-deduplicated, ~14 millions post-deduplicated).
+
+Another method is used in The Willy Report, and is less aggressive than the
+above methods: by removing exact line duplicates. Using this method, the report
+finds that the "bots" bought a total of some round USD numbers, e.g.:
+
+: User_ID: 807884
+: User: a6e1c702-e6b2-4585-bdaf-d1f00e6e7db2
+: Start: 27-9-2013 13:41
+: End: 1-10-2013 0:30
+: BTC bought: 17650.499699839987
+: USD spent: 2500000.0
+
+while using both deduplication methods described by Feder et al. (2018), the
+above becomes, respectively:
+
+: User_ID: 807884
+: User: a6e1c702-e6b2-4585-bdaf-d1f00e6e7db2
+: Start: 27-9-2013 13:41
+: End: 1-10-2013 0:30
+: BTC bought: 17650.499699839987
+: USD spent: 2464255.04891
+
+and:
+
+: User_ID: 807884
+: User: a6e1c702-e6b2-4585-bdaf-d1f00e6e7db2
+: Start: 27-9-2013 13:41
+: End: 1-10-2013 0:30
+: BTC bought: 17650.499699839987
+: USD spent: 2435224.24669
+
+so deduplication method used in The Willy Report is used.
+
+** Importing
+
+To deduplicate and import the .csv files, I have provided the
+~script/import-trades~ script. This script also ignores corrupt lines.
+
+The following is the list of columns of the ~Trades~ table and a few sample
+records:
+
+: +--------+-------+---------------------+-------+--------+--------------+-------+------+------------+----------+--------+-----------------+-----------------+-----------+-----------------+-----------------+-------------+-----------------+--------------+------------+
+: | _rowid | Id    | Stamp               | Index | User__ | User_Id_Hash | Japan | Type | Currency__ | Bitcoins | Money  | Money_Rate      | Money_Jpy       | Money_Fee | Money_Fee_Rate  | Money_Fee_Jpy   | Bitcoin_Fee | Bitcoin_Fee_Jpy | User_Country | User_State |
+: +--------+-------+---------------------+-------+--------+--------------+-------+------+------------+----------+--------+-----------------+-----------------+-----------+-----------------+-----------------+-------------+-----------------+--------------+------------+
+: |      1 | 35372 | 2011-04-01 00:28:54 |  3931 |        |              | NJP   | buy  | USD        |    23.02 | 18.061 | 82.783135074259 | 1495.1462025762 |         0 | 82.783135074259 |               0 |       0.149 | 9.8554018334177 | NULL         | NULL       |
+: |      2 | 35372 | 2011-04-01 00:28:54 |   895 |        |              | NJP   | sell | USD        |    23.02 | 18.061 | 82.783135074259 | 1495.1462025762 |   0.11772 | 82.783135074259 | 9.7452306609418 |           0 |               0 | NULL         | NULL       |
+: |      3 | 35373 | 2011-04-01 00:28:54 |   722 |        |              | NJP   | buy  | USD        |       10 |    7.8 | 82.783135074259 | 645.70845357922 |         0 | 82.783135074259 |               0 |       0.065 | 4.2993363702829 | NULL         | NULL       |
+: |      4 | 35373 | 2011-04-01 00:28:54 |   895 |        |              | NJP   | sell | USD        |       10 |    7.8 | 82.783135074259 | 645.70845357922 |      0.05 | 82.783135074259 |  4.139156753713 |           0 |               0 | NULL         | NULL       |
+: |      5 | 35374 | 2011-04-01 00:28:54 |  3605 |        |              | NJP   | buy  | USD        |       35 |   27.3 | 82.783135074259 | 2259.9795875273 |         0 | 82.783135074259 |               0 |       0.227 | 15.014605477757 | NULL         | NULL       |
+: |      6 | 35374 | 2011-04-01 00:28:54 |   895 |        |              | NJP   | sell | USD        |       35 |   27.3 | 82.783135074259 | 2259.9795875273 |     0.177 | 82.783135074259 | 14.652614908144 |           0 |               0 | NULL         | NULL       |
+
+Note: Importing the trade data takes about 58 minutes on my Asus Zenbook UX305
+(Intel Core M-Y571 1.2 GHz) laptop.
+
+** Summary statistics
+
+After importing, the table contains 21,229,003 rows. There are 97,944 unique
+User__ values, 127,233 unique Index values, 170 unique User_Country values (with
+regular two-letter country codes as well as '' (empty), '!!', '??', 'A1', 'A2').
+
+* References
+
+** Feder, A., Gandal, N., Hamrick, J. T., & Moore, T. (2018)
+
+Feder, A., Gandal, N., Hamrick, J. T., & Moore, T. (2018). Impact of DDoS and
+other security shocks on Bitcoin currency exchanges: Evidence from Mt. Gox.
+Retrieved February 24, 2018, from
+https://academic.oup.com/cybersecurity/article/3/2/137/4831474

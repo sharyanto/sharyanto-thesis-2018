@@ -1,0 +1,64 @@
+#!/usr/bin/env perl
+
+# Before running this script, please do the following:
+#
+# 1. Install DBIx::Connect::MySQL module from CPAN.
+#
+# 2. Create a MySQL database called `mtgox` and create a ~/.my.cnf configuration
+#    file that contains access information to the database, e.g.:
+#
+#    [client]
+#    user=root
+#    password=your_db_password
+#
+# 3. Extract `mtgox_balances` from the MtGox2014Leak.zip file in the current
+#    directory.
+
+use 5.010001;
+use strict;
+use warnings;
+
+use DBIx::Connect::MySQL;
+
+my $dbh = DBIx::Connect::MySQL->connect(
+    "dbi:mysql:database=mtgox", undef, undef, {RaiseError=>1});
+
+$dbh->do("
+CREATE TABLE IF NOT EXISTS User_Wallet (
+    User_wallet__ CHAR(36) PRIMARY KEY NOT NULL,
+    User__ CHAR(36) NOT NULL,
+    Currency__ CHAR(3) NOT NULL,
+    Balance BIGINT NOT NULL,
+    Liabilities BIGINT NOT NULL,
+    `Index` INT NOT NULL,
+    Backend VARCHAR(16) NOT NULL,
+    Daily_Withdraw_Limit BIGINT,
+    Monthly_Withdraw_Limit BIGINT,
+    Disable_Limits CHAR(1),
+    Stamp DATETIME,
+
+    INDEX(`Index`),
+    INDEX(User__)
+) ENGINE='MyISAM'
+");
+
+open my $fh, "<", "mtgox_balances"
+    or die "Can't open `mtgox_balances` file in the current directory ($!). ".
+    "Please extract the file from MtGox2014Leak.zip and put it in the current ".
+    "directory first before running this script\n";
+
+my $sth = $dbh->prepare("
+INSERT INTO User_Wallet (User_Wallet__, User__, Currency__, Balance, Liabilities,  `Index`, Backend, Daily_Withdraw_Limit, Monthly_Withdraw_Limit, Disable_Limits,  Stamp) VALUES (?,?,?,?,?, ?,?,?,?,?, ?)
+");
+
+my $i = 0;
+while (<$fh>) {
+    $i++;
+    next if $i < 5;
+    last unless s/^\|\s*//;
+
+    chomp;
+    my @F = split /\s*\|\s*/, $_;
+    for (@F) { $_ = undef if $_ eq 'NULL' }
+    $sth->execute(@F);
+}

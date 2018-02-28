@@ -1,0 +1,68 @@
+* About this document
+
+This document is written in Org format. To view this properly, use Emacs (with
+org-mode installed) or view it on GitHub, or use other suitable viewers.
+However, much like Markdown, this document is quite readable in plain text. See
+https://orgmode.org for more details.
+
+* About the bitcoincharts data
+
+bitcoincharts.com maintains Mt. Gox bitcoin prices and trading volumes in
+various currencies. Some popular currencies have data for every few minutes or
+seconds, at least during some time periods.
+
+Downloaded from https://api.bitcoincharts.com/v1/csv/ on 2018-02-19.
+
+List of filenames and sizes:
+
+: -rw-r--r-- 1 u1 u1  1168591 Jul 18  2017 inactive_exchanges/mtgoxAUD.csv.gz
+: -rw-r--r-- 1 u1 u1   333270 Jul 18  2017 inactive_exchanges/mtgoxCAD.csv.gz
+: -rw-r--r-- 1 u1 u1    85851 Jul 18  2017 inactive_exchanges/mtgoxCHF.csv.gz
+: -rw-r--r-- 1 u1 u1    54414 Jul 18  2017 inactive_exchanges/mtgoxCNY.csv.gz
+: -rw-r--r-- 1 u1 u1    24211 Jul 18  2017 inactive_exchanges/mtgoxDKK.csv.gz
+: -rw-r--r-- 1 u1 u1  7307100 Jul 18  2017 inactive_exchanges/mtgoxEUR.csv.gz
+: -rw-r--r-- 1 u1 u1  2398002 Jul 18  2017 inactive_exchanges/mtgoxGBP.csv.gz
+: -rw-r--r-- 1 u1 u1    25783 Jul 18  2017 inactive_exchanges/mtgoxHKD.csv.gz
+: -rw-r--r-- 1 u1 u1  1546056 Jul 18  2017 inactive_exchanges/mtgoxJPY.csv.gz
+: -rw-r--r-- 1 u1 u1       34 Jul 18  2017 inactive_exchanges/mtgoxNOK.csv.gz
+: -rw-r--r-- 1 u1 u1    37254 Jul 18  2017 inactive_exchanges/mtgoxNZD.csv.gz
+: -rw-r--r-- 1 u1 u1  1130246 Jul 18  2017 inactive_exchanges/mtgoxPLN.csv.gz
+: -rw-r--r-- 1 u1 u1    64335 Jul 18  2017 inactive_exchanges/mtgoxRUB.csv.gz
+: -rw-r--r-- 1 u1 u1   107068 Jul 18  2017 inactive_exchanges/mtgoxSEK.csv.gz
+: -rw-r--r-- 1 u1 u1    32396 Jul 18  2017 inactive_exchanges/mtgoxSGD.csv.gz
+: -rw-r--r-- 1 u1 u1     8647 Jul 18  2017 inactive_exchanges/mtgoxTHB.csv.gz
+: -rw-r--r-- 1 u1 u1 60056109 Jul 18  2017 inactive_exchanges/mtgoxUSD.csv.gz
+: -rw-r--r-- 1 u1 u1  1163188 Feb 19 18:07 mtgoxAUD.csv.gz
+: -rw-r--r-- 1 u1 u1   333079 Feb 19 18:29 mtgoxCAD.csv.gz
+: -rw-r--r-- 1 u1 u1    85783 Feb 19 18:22 mtgoxCHF.csv.gz
+: -rw-r--r-- 1 u1 u1    54343 Feb 19 18:07 mtgoxCNY.csv.gz
+: -rw-r--r-- 1 u1 u1    24202 Feb 19 18:22 mtgoxDKK.csv.gz
+: -rw-r--r-- 1 u1 u1  7250835 Feb 19 18:16 mtgoxEUR.csv.gz
+: -rw-r--r-- 1 u1 u1  2386963 Feb 19 18:22 mtgoxGBP.csv.gz
+: -rw-r--r-- 1 u1 u1    25768 Feb 19 18:16 mtgoxHKD.csv.gz
+: -rw-r--r-- 1 u1 u1  1535016 Feb 19 18:22 mtgoxJPY.csv.gz
+: -rw-r--r-- 1 u1 u1       34 Feb 19 18:22 mtgoxNOK.csv.gz
+: -rw-r--r-- 1 u1 u1    37204 Feb 19 18:07 mtgoxNZD.csv.gz
+: -rw-r--r-- 1 u1 u1  1126435 Feb 19 18:29 mtgoxPLN.csv.gz
+: -rw-r--r-- 1 u1 u1    64332 Feb 19 18:22 mtgoxRUB.csv.gz
+: -rw-r--r-- 1 u1 u1   106996 Feb 19 18:16 mtgoxSEK.csv.gz
+: -rw-r--r-- 1 u1 u1    32378 Feb 19 18:16 mtgoxSGD.csv.gz
+: -rw-r--r-- 1 u1 u1     8644 Feb 19 18:22 mtgoxTHB.csv.gz
+: -rw-r--r-- 1 u1 u1       34 Feb 19 18:22 mtgoxUSD.csv.gz
+
+(The actual file is not included in this repository, but available upon request
+or can be downloaded from the abovementioned URL.)
+
+* Formats
+
+The .CSV files have 3 fields: timestamp (Unix epoch), price in fiat currency,
+volume in bitcoins.
+
+* Importing
+
+Total num
+
+* Summary statistics
+
+Total number of rows for USD price: 8295809. Time range: 2010-07-17 23:09:17 to
+2014-02-25 01:59:06.

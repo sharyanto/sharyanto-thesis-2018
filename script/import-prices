@@ -1,0 +1,58 @@
+#!/usr/bin/env perl
+
+# Before running this script, please do the following:
+#
+# 1. Install DBIx::Connect::MySQL module from CPAN.
+#
+# 2. Create a MySQL database called `mtgox` and create a ~/.my.cnf configuration
+#    file that contains access information to the database, e.g.:
+#
+#    [client]
+#    user=root
+#    password=your_db_password
+#
+# 3. Put `mtgox*.csv.gz` from
+#    https://api.bitcoincharts.com/v1/csv/inactive_exchanges/ into the current
+#    directory.
+
+use 5.010001;
+use strict;
+use warnings;
+
+use DBIx::Connect::MySQL;
+use POSIX qw(strftime);
+
+my $dbh = DBIx::Connect::MySQL->connect(
+    "dbi:mysql:database=mtgox", undef, undef, {RaiseError=>1});
+
+$dbh->do("
+CREATE TABLE IF NOT EXISTS Price (
+  _rowid INT NOT NULL PRIMARY KEY AUTO_INCREMENT,
+  Stamp DATETIME NOT NULL,
+  Currency__ CHAR(3) NOT NULL,
+  Price DOUBLE NOT NULL,
+  Volume DOUBLE NOT NULL
+) ENGINE='MyISAM';
+");
+
+my @files = glob("mtgox*.csv.gz");
+@files or die "Please put mtgoxUSD.csv.gz file (and others) in the ".
+    "current directory first\n";
+
+my $sth = $dbh->prepare("
+INSERT INTO Price (Stamp, Currency__, Price, Volume) VALUES (?,?,?,?)
+");
+
+for my $file (@files) {
+    warn "Processing '$file' ...\n";
+    my ($currency) = $file =~ /mtgox([A-Z][A-Z][A-Z])/;
+    open my $fh, "zcat $file |" or die;
+
+    my $i = 0;
+    while (<$fh>) {
+        chomp;
+        my @F = split/,/,$_;
+        $F[0] = strftime "%Y-%m-%d %H:%M:%S", gmtime $F[0];
+        $sth->execute($F[0], $currency, $F[1], $F[2]);
+    }
+}
