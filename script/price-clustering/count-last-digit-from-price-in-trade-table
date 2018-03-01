@@ -1,0 +1,49 @@
+#!/usr/bin/env perl
+
+use 5.010001;
+use strict;
+use warnings;
+
+use Data::Dump;
+use DBIx::Connect::MySQL;
+use Progress::Any '$progress';
+use Progress::Any::Output 'TermProgressBarColor';
+
+my $dbh = DBIx::Connect::MySQL->connect(
+    "dbi:mysql:database=mtgox", undef, undef
+);
+
+my $row_where = " WHERE Type='sell' AND User_Country IN ('CN','HK','TW')";
+
+$progress->target($dbh->selectrow_arrayref("SELECT COUNT(*) FROM Trade$row_where")->[0]);
+
+my $sth = $dbh->prepare("SELECT Money/Bitcoins AS Price FROM Trade$row_where");
+$sth->execute;
+
+my %digits;
+while (my $row = $sth->fetchrow_hashref) {
+    $progress->update;
+    my $price = sprintf("%.5f", $row->{Price});
+    $digits{substr($price, -1, 1)}++;
+}
+
+$progress->finish;
+
+dd \%digits;
+
+=head1 RESULT
+
+=head2 sell, CN|HK|TW, last digit of 4 decimal places
+
+{
+  "0" => 348465,
+  "1" => 37938,
+  "2" => 29906,
+  "3" => 26621,
+  "4" => 26175,
+  "5" => 27711,
+  "6" => 26176,
+  "7" => 26934,
+  "8" => 28964,
+  "9" => 33900,
+}
