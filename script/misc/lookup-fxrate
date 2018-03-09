@@ -1,0 +1,57 @@
+#!/usr/bin/env perl
+
+# a demo script
+
+use 5.010001;
+use strict;
+use warnings;
+use Log::ger;
+
+use FindBin '$Bin';
+use List::BinarySearch 'binsearch_pos';
+use Perinci::CmdLine::Any;
+
+our %SPEC;
+
+$SPEC{app} = {
+    v => 1.1,
+    args => {
+        code => {
+            schema => 'currency::code*',
+            req => 1,
+            pos => 0,
+        },
+        date => {
+            schema => 'date*',
+            req => 1,
+            pos => 1,
+        },
+    },
+};
+sub app {
+    my %args = @_;
+
+    my $code = $args{code};
+    my $csvpath = "$Bin/../../data/fxrates/$code-USD.csv";
+    unless (-f $csvpath) {
+        return [412, "No CSV at '$csvpath'"];
+    }
+
+    open my $fh, "<", $csvpath or die;
+    my @ary;
+    while (<$fh>) {
+        /^"([^"]+)","([^"]+)"/ or die;
+        push @ary, [$1, $2];
+    }
+    @ary = sort { $a->[0] <=> $b->[0] } @ary;
+
+    my $pos = binsearch_pos {$a->[0] <=> $b->[0]} [$args{date}], @ary;
+    log_trace "date=%s, pos=%s", $args{date}, $pos;
+
+    [200, "OK", $ary[$pos][1]];
+}
+
+Perinci::CmdLine::Any->new(
+    url=>'/main/app',
+    log=>1,
+)->run;
