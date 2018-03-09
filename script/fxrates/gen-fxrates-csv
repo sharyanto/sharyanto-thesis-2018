@@ -1,0 +1,31 @@
+#!/usr/bin/env perl
+
+use 5.010001;
+use strict;
+use warnings;
+
+# This script converts the CSV files from investing.com for easier usage in this
+# project: convert the first column to Unix epoch, discard the other data fields
+# other than the price (mid-market), produce USD-XXX rates instead of the other
+# way around.
+
+use DateTime::Format::Flexible;
+use FindBin '$Bin';
+
+my $dateparser = DateTime::Format::Flexible->new;
+
+for my $filename (glob "$Bin/../../data/fxrates/raw/*") {
+    warn "D:Opening $filename ...\n";
+    $filename =~ m!.+/(\w{3}) (\w{3})! or die;
+    my $outfilename = "$Bin/../../data/fxrates/$2-$1.csv";
+    open my $fh, "<", $filename or die "Can't open $filename: $!";
+    open my $outfh, ">", $outfilename or die "Can't open $outfilename for writing: $!";
+    my $i = 0;
+    while (<$fh>) {
+        next unless $i++;
+        last if /^""/;
+        my ($date, $price) = /^"([^"]+)","([^"]+)"/ or die;
+        my $dt = $dateparser->parse_datetime($date) or die;
+        print $outfh sprintf(qq("%d","%.6f"\n), $dt->epoch, 1/$price);
+    }
+}

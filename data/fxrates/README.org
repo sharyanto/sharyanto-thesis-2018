@@ -1,0 +1,10 @@
+* About this document
+
+This document is written in Org format. To view this properly, use Emacs (with
+org-mode installed) or view it on GitHub, or use other suitable viewers.
+However, much like Markdown, this document is quite readable in plain text. See
+https://orgmode.org for more details.
+
+* About foreign exchange data
+
+The historical foreign exchange data is retrieved from https://investing.com.
