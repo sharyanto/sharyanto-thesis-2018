@@ -6,63 +6,47 @@
 use 5.010001;
 use strict;
 use warnings;
+use FindBin '$Bin';
 
+use Business::Inventory::Valuation;
 use DBIx::Connect::MySQL;
+use List::BinarySearch 'binsearch_pos';
 use Progress::Any '$progress';
 use Progress::Any::Output 'TermProgressBarColor';
+
+# load exchange rates
+my %Fx_Rates; # key = currency, val = [ [timestamp1, rate1-against-USD], [timestamp2, rate2], ... ]
+
+for my $filename (glob "$Bin/../data/fxrates/*.csv") {
+    my ($cur) = $filename =~ /^(\w+)-/;
+    $Fx_Rates{$cur} = [];
+    open my $fh, "<", $filename;
+    while (my $row = <$fh>) {
+        $row =~ /"([^"]+)","([^"]+)"/ or die;
+        push @{ $Fx_Rates{$cur} }, [$1, $2];
+    }
+}
 
 my $dbh = DBIx::Connect::MySQL->connect(
     "dbi:mysql:database=mtgox", undef, undef, {RaiseError=>1});
 
-my $stat_columns = <<_;
-  First_Trade_Stamp DATETIME,
-  Last_Trade_Stamp  DATETIME,
-  Num_Trades INT NOT NULL,
-  Num_Sells  INT NOT NULL,
-  Num_Buys   INT NOT NULL,
-  Bitcoin_Volume       DOUBLE NOT NULL,
-  Bitcoin_Volume_Sells DOUBLE NOT NULL,
-  Bitcoin_Volume_Buys  DOUBLE NOT NULL
-_
-
-$dbh->do("
-CREATE TABLE IF NOT EXISTS _Trader_User_Stats (
-  _rowid INT NOT NULL PRIMARY KEY AUTO_INCREMENT,
-  User__ CHAR(36) NOT NULL, UNIQUE(User__),
-  $stat_columns
-) ENGINE='MyISAM';
-");
-$dbh->do("
-CREATE TABLE IF NOT EXISTS _Trader_Index_Stats (
-  _rowid INT NOT NULL PRIMARY KEY AUTO_INCREMENT,
-  `Index` INT NOT NULL, UNIQUE(`Index`),
-  $stat_columns
-) ENGINE='MyISAM';
-");
-
-my ($num_recs) = $dbh->selectrow_array("SELECT COUNT(*) FROM Trade WHERE `Index` NOT IN (SELECT `Index` FROM _Index_Exclude) ORDER BY Stamp");
-#my $num_recs = 100;
+my ($num_recs) = $dbh->selectrow_array("SELECT COUNT(*) FROM _Trade2");
 $progress->target($num_recs);
 
-my $sth = $dbh->prepare("SELECT * FROM Trade WHERE `Index` NOT IN (SELECT `Index` FROM _Index_Exclude) ORDER BY Stamp");
+my $sth = $dbh->prepare("SELECT * FROM _Trade2 ORDER BY _rowid");
 $sth->execute;
 
-my %Trader_By_Index;
-my %Trader_By_User__;
+my %Balance_USD_By_User__;
+my %Balance_BTC_By_User__;
+my %Inventory_By_User__;
+
 my $i = 0;
 while (my $row = $sth->fetchrow_hashref) {
     $i++;
     $progress->update(message => "Processing row #$i");
-    my @hashinfo;
-    if ($row->{Index}) {
-        push @hashinfo, [\%Trader_By_Index, $row->{Index}];
-    }
-    if ($row->{User__}) {
-        push @hashinfo, [\%Trader_By_User__, $row->{User__}];
-    }
+    next unless $row->{User__};
 
-    for my $hashinfo (@hashinfo) {
-        my $key = $hashinfo->[1];
+    $Balance_USD_By_User__{my $key = $hashinfo->[1];
         $hashinfo->[0]{$key} //= {
             First_Trade_Stamp => $row->{Stamp},
             Num_Trades => 0,

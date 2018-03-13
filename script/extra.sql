@@ -19,7 +19,7 @@ CREATE INDEX Trade_User__       ON Trade(User__);
 CREATE TABLE _Index_Exclude (
     `Index` INT NOT NULL PRIMARY KEY,
     Note VARCHAR(255)
-);
+) ENGINE='MyISAM';
 
 INSERT INTO _Index_Exclude VALUES (-1, 'deleted');
 INSERT INTO _Index_Exclude VALUES (-2, 'THK');
@@ -49,8 +49,17 @@ CREATE TABLE _Trade2 (
     Bitcoin_Fee DOUBLE NOT NULL,     -- [15] fees in bitcoins (only when type=buy)
     Bitcoin_Fee_Jpy DOUBLE NOT NULL, -- [16] fess in bitcoins in JPY
     User_Country CHAR(2),            -- [17]
-    User_State CHAR(2)               -- [18]
-);
+    User_State CHAR(2),               -- [18]
+
+    Balance_Bitcoins DOUBLE NOT NULL,
+    Balance_USD DOUBLE NOT NULL,
+    Avg_Purchase_Price DOUBLE
+    -- Tx_Paper_Gain DOUBLE,
+    -- Tx_Realized_Gain DOUBLE,
+    -- Total_Paper_Gain DOUBLE,
+    -- Total_Realized_Gain DOUBLE
+
+) ENGINE='MyISAM';
 
 INSERT INTO _Trade2 SELECT * FROM Trade WHERE `Index` NOT IN (SELECT `Index` FROM _Index_Exclude);
 

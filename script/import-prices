@@ -28,7 +28,7 @@ my $dbh = DBIx::Connect::MySQL->connect(
 $dbh->do("
 CREATE TABLE IF NOT EXISTS Price (
   _rowid INT NOT NULL PRIMARY KEY AUTO_INCREMENT,
-  Stamp DATETIME NOT NULL,
+  Stamp DATETIME NOT NULL, -- in UTC
   Currency__ CHAR(3) NOT NULL,
   Price DOUBLE NOT NULL,
   Volume DOUBLE NOT NULL

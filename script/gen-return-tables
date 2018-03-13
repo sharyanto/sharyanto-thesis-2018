@@ -1,0 +1,173 @@
+#!/usr/bin/env perl
+
+# Before running this script, you have to already run the import-* scripts. Also
+# install the required CPAN modules.
+
+use 5.010001;
+use strict;
+use warnings;
+
+use DateTime;
+use DBIx::Connect::MySQL;
+use List::BinarySearch qw(binsearch_pos);
+use POSIX qw(strftime);
+use Progress::Any '$progress';
+use Progress::Any::Output 'TermProgressBarColor';
+
+my $dbh = DBIx::Connect::MySQL->connect(
+    "dbi:mysql:database=mtgox", undef, undef, {RaiseError=>1});
+
+my @prices;
+my $sth = $dbh->prepare("SELECT Price,UNIX_TIMESTAMP(Stamp) UnixTime FROM Price ORDER BY Stamp");
+$sth->execute;
+while (my @row = $sth->fetchrow_array) {
+    $progress->update(message => "price #".scalar(@row)) if @row % 1000 == 0;
+    push @prices, [$row[1], $row[0]];
+}
+
+$dbh->do("
+CREATE TABLE IF NOT EXISTS _Hourly_Return (
+  _rowid INT NOT NULL PRIMARY KEY AUTO_INCREMENT,
+  Stamp DATETIME NOT NULL, UNIQUE(Stamp),
+  Currency__ CHAR(3) NOT NULL,
+  Price DOUBLE NOT NULL,
+  `Return` DOUBLE,
+  Price_Date DATETIME NOT NULL
+) ENGINE='MyISAM';
+");
+$dbh->do("
+CREATE TABLE IF NOT EXISTS _Daily_Return (
+  _rowid INT NOT NULL PRIMARY KEY AUTO_INCREMENT,
+  Stamp DATETIME NOT NULL, UNIQUE(Stamp),
+  Currency__ CHAR(3) NOT NULL,
+  Price DOUBLE NOT NULL,
+  `Return` DOUBLE,
+  Price_Date DATETIME NOT NULL
+) ENGINE='MyISAM';
+");
+$dbh->do("
+CREATE TABLE IF NOT EXISTS _Weekly_Return (
+  _rowid INT NOT NULL PRIMARY KEY AUTO_INCREMENT,
+  Stamp DATETIME NOT NULL, UNIQUE(Stamp),
+  Currency__ CHAR(3) NOT NULL,
+  Price DOUBLE NOT NULL,
+  `Return` DOUBLE,
+  Price_Date DATETIME NOT NULL
+) ENGINE='MyISAM';
+");
+$dbh->do("
+CREATE TABLE IF NOT EXISTS _Monthly_Return (
+  _rowid INT NOT NULL PRIMARY KEY AUTO_INCREMENT,
+  Stamp DATETIME NOT NULL, UNIQUE(Stamp),
+  Currency__ CHAR(3) NOT NULL,
+  Price DOUBLE NOT NULL,
+  `Return` DOUBLE,
+  Price_Date DATETIME NOT NULL
+) ENGINE='MyISAM';
+");
+
+HOURLY: {
+    my $dt = DateTime->new(year=>2011, month=>4, day=>1, hour=>0, minute=>0, second=>0, time_zone=>"UTC");
+    $dt->subtract(hours => 1);
+
+    my $dt_end = DateTime->new(year=>2013, month=>12, day=>1, hour=>0, minute=>0, second=>0, time_zone=>"UTC");
+
+    my $prevprice;
+    while (1) {
+        last if DateTime->compare($dt, $dt_end) >= 0;
+        my $time = $dt->epoch;
+        $progress->update(message => "hourly " . $dt->ymd);
+        my $idx = binsearch_pos { $a->[0] <=> $b->[0] } [$time], @prices;
+        my $price = $prices[$idx][1];
+        $dbh->do(
+            "INSERT INTO _Hourly_Return (Stamp,Currency__,Price,`Return`,Price_Date) VALUES (?,?,?,?,?)", {},
+            $dt->strftime("%Y-%m-%d %H:%M:%S"),
+            'USD',
+            $price,
+            defined($prevprice) ? ($price-$prevprice)/$prevprice : undef,
+            strftime("%Y-%m-%d %H:%M:%S", gmtime($prices[$idx][0])),
+        );
+        $prevprice = $price;
+        $dt->add(hours => 1);
+    }
+}
+
+DAILY: {
+    my $dt = DateTime->new(year=>2011, month=>4, day=>1, hour=>0, minute=>0, second=>0, time_zone=>"UTC");
+    $dt->subtract(days => 1);
+
+    my $dt_end = DateTime->new(year=>2013, month=>12, day=>1, hour=>0, minute=>0, second=>0, time_zone=>"UTC");
+
+    my $prevprice;
+    while (1) {
+        last if DateTime->compare($dt, $dt_end) >= 0;
+        my $time = $dt->epoch;
+        $progress->update(message => "daily " . $dt->ymd);
+        my $idx = binsearch_pos { $a->[0] <=> $b->[0] } [$time], @prices;
+        my $price = $prices[$idx][1];
+        $dbh->do(
+            "INSERT INTO _Daily_Return (Stamp,Currency__,Price,`Return`,Price_Date) VALUES (?,?,?,?,?)", {},
+            $dt->strftime("%Y-%m-%d %H:%M:%S"),
+            'USD',
+            $price,
+            defined($prevprice) ? ($price-$prevprice)/$prevprice : undef,
+            strftime("%Y-%m-%d %H:%M:%S", gmtime($prices[$idx][0])),
+        );
+        $prevprice = $price;
+        $dt->add(days => 1);
+    }
+}
+
+WEEKLY: {
+    my $dt = DateTime->new(year=>2011, month=>4, day=>1, hour=>0, minute=>0, second=>0, time_zone=>"UTC");
+    $dt->subtract(days => 7);
+
+    my $dt_end = DateTime->new(year=>2013, month=>12, day=>1, hour=>0, minute=>0, second=>0, time_zone=>"UTC");
+
+    my $prevprice;
+    while (1) {
+        last if DateTime->compare($dt, $dt_end) >= 0;
+        my $time = $dt->epoch;
+        $progress->update(message => "weekly " . $dt->ymd);
+        my $idx = binsearch_pos { $a->[0] <=> $b->[0] } [$time], @prices;
+        my $price = $prices[$idx][1];
+        $dbh->do(
+            "INSERT INTO _Weekly_Return (Stamp,Currency__,Price,`Return`,Price_Date) VALUES (?,?,?,?,?)", {},
+            $dt->strftime("%Y-%m-%d %H:%M:%S"),
+            'USD',
+            $price,
+            defined($prevprice) ? ($price-$prevprice)/$prevprice : undef,
+            strftime("%Y-%m-%d %H:%M:%S", gmtime($prices[$idx][0])),
+        );
+        $prevprice = $price;
+        $dt->add(days => 7);
+    }
+}
+
+MONTHLY: {
+    my $dt = DateTime->new(year=>2011, month=>4, day=>1, hour=>0, minute=>0, second=>0, time_zone=>"UTC");
+    $dt->subtract(months => 1);
+
+    my $dt_end = DateTime->new(year=>2013, month=>12, day=>1, hour=>0, minute=>0, second=>0, time_zone=>"UTC");
+
+    my $prevprice;
+    while (1) {
+        last if DateTime->compare($dt, $dt_end) >= 0;
+        my $time = $dt->epoch;
+        $progress->update(message => "monthly " . $dt->ymd);
+        my $idx = binsearch_pos { $a->[0] <=> $b->[0] } [$time], @prices;
+        my $price = $prices[$idx][1];
+        $dbh->do(
+            "INSERT INTO _Monthly_Return (Stamp,Currency__,Price,`Return`,Price_Date) VALUES (?,?,?,?,?)", {},
+            $dt->strftime("%Y-%m-%d %H:%M:%S"),
+            'USD',
+            $price,
+            defined($prevprice) ? ($price-$prevprice)/$prevprice : undef,
+            strftime("%Y-%m-%d %H:%M:%S", gmtime($prices[$idx][0])),
+        );
+        $prevprice = $price;
+        $dt->add(months => 1);
+    }
+}
+
+$progress->finish;
