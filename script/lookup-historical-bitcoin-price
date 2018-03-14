@@ -1,0 +1,65 @@
+#!/usr/bin/env perl
+
+use 5.010001;
+use strict;
+use warnings;
+use Log::ger;
+
+use Perinci::CmdLine::Any;
+
+our %SPEC;
+
+$SPEC{app} = {
+    v => 1.1,
+    args => {
+        date => {
+            schema => 'date*',
+            req => 1,
+            pos => 0,
+        },
+        raw => {
+            schema => 'bool*',
+        },
+        currency => {
+            schema =>'str*',
+            default => 'USD',
+        },
+    },
+    examples => [
+        {
+            argv => [qw/2013-06-01T10:00:00Z/],
+        },
+    ],
+};
+sub app {
+    require DBIx::Connect::MySQL;
+
+    my %args = @_;
+
+    my $dbh = DBIx::Connect::MySQL->connect(
+        "dbi:mysql:database=mtgox", undef, undef, {RaiseError=>1});
+    $dbh->do("SET time_zone = '+00:00'");
+
+    #my $sth = $dbh->prepare("SELECT * From Price WHERE Currency__=? AND Stamp BETWEEN FROM_UNIXTIME(?) AND FROM_UNIXTIME(?) ORDER BY ABS(? - UNIX_TIMESTAMP(Stamp)) LIMIT 10");
+    #$sth->execute($args{currency}, $args{date} - 86400, $args{date} + 86400, $args{date});
+
+    # more debuggable
+    my $sth = $dbh->prepare("SELECT * From Price WHERE Currency__='$args{currency}' AND Stamp BETWEEN FROM_UNIXTIME(".($args{date} - 86400).") AND FROM_UNIXTIME(".($args{date} + 86400).") ORDER BY ABS(".($args{date})." - UNIX_TIMESTAMP(Stamp)) LIMIT 10");
+    $sth->execute();
+
+    if ($args{raw}) {
+        my @rows;
+        while (my $row = $sth->fetchrow_hashref) {
+            push @rows, $row;
+        }
+        [200, "OK", \@rows];
+    } else {
+        my $row = $sth->fetchrow_hashref;
+        [200, "OK", $row->{Price}, {'func.date' => $row->{Stamp}}];
+    }
+}
+
+Perinci::CmdLine::Any->new(
+    url => '/main/app',
+    log => 1,
+)->run;

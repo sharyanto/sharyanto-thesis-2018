@@ -1,12 +1,13 @@
 #!/usr/bin/env perl
 
-# Before running this script, you have to already run the import-* scripts. Also
-# install the required CPAN modules.
+# Before running this script, you have to already run the import-* scripts and
+# extra.sql. Also install the required CPAN modules.
 
 use 5.010001;
 use strict;
 use warnings;
 use FindBin '$Bin';
+use Log::ger;
 
 use Business::Inventory::Valuation;
 use DBIx::Connect::MySQL;
@@ -14,85 +15,84 @@ use List::BinarySearch 'binsearch_pos';
 use Progress::Any '$progress';
 use Progress::Any::Output 'TermProgressBarColor';
 
-# load exchange rates
-my %Fx_Rates; # key = currency, val = [ [timestamp1, rate1-against-USD], [timestamp2, rate2], ... ]
-
-for my $filename (glob "$Bin/../data/fxrates/*.csv") {
-    my ($cur) = $filename =~ /^(\w+)-/;
-    $Fx_Rates{$cur} = [];
-    open my $fh, "<", $filename;
-    while (my $row = <$fh>) {
-        $row =~ /"([^"]+)","([^"]+)"/ or die;
-        push @{ $Fx_Rates{$cur} }, [$1, $2];
-    }
-}
-
 my $dbh = DBIx::Connect::MySQL->connect(
     "dbi:mysql:database=mtgox", undef, undef, {RaiseError=>1});
+$dbh->do("SET time_zone = '+00:00'");
 
-my ($num_recs) = $dbh->selectrow_array("SELECT COUNT(*) FROM _Trade2");
-$progress->target($num_recs);
+#my $sth = $dbh->prepare("SELECT *, UNIX_TIMESTAMP(Stamp) AS Unix_Time FROM _Trade2 ORDER BY Stamp");
+#$sth->execute;
 
-my $sth = $dbh->prepare("SELECT * FROM _Trade2 ORDER BY _rowid");
+my $sth = $dbh->prepare("SELECT *, UNIX_TIMESTAMP(Stamp) AS Unix_Time FROM _Trade2 ORDER BY Stamp LIMIT 1000");
 $sth->execute;
 
-my %Balance_USD_By_User__;
-my %Balance_BTC_By_User__;
-my %Inventory_By_User__;
+my %Balances_Jpy     ; # key = Index, value = fiat balance in JPY
+my %Balances_Bitcoins; # key = Index, value = bitcoin balance
+my %Inventories      ; # key = Index, value = Business::Inventory::Valuation object
+my %Paper_Gains           ; # key = Index
+my %Total_Realized_Gains  ; # key = Index
+
+my $sth_set_balances       = $dbh->prepare("UPDATE _Trade2 SET Balance_Bitcoins=?, Balance_Jpy=? WHERE _rowid=?");
+my $sth_set_paper_gain     = $dbh->prepare("UPDATE _Trade2 SET Paper_Gain=? WHERE _rowid=?");
+my $sth_set_realized_gains = $dbh->prepare("UPDATE _Trade2 SET Tx_Realized_Gain=?, Total_Realized_Gain=? WHERE _rowid=?");
 
 my $i = 0;
 while (my $row = $sth->fetchrow_hashref) {
     $i++;
+    next if $row->{Bitcoins} == 0; # a couple of rows has this, probably due to rounding. ignore these rows.
+
     $progress->update(message => "Processing row #$i");
-    next unless $row->{User__};
 
-    $Balance_USD_By_User__{my $key = $hashinfo->[1];
-        $hashinfo->[0]{$key} //= {
-            First_Trade_Stamp => $row->{Stamp},
-            Num_Trades => 0,
-            Num_Buys   => 0,
-            Num_Sells  => 0,
-            Bitcoin_Volume       => 0,
-            Bitcoin_Volume_Sells => 0,
-            Bitcoin_Volume_Buys  => 0,
-        };
-        my $hash = $hashinfo->[0]{$key};
+    my $rowid = $row->{_rowid};
+    my $idx = $row->{Index};
 
-        $hash->{Last_Trade_Stamp} = $row->{Stamp};
-        $hash->{Num_Trades}++;
-        $hash->{Num_Buys}++  if $row->{Type} eq 'buy';
-        $hash->{Num_Sells}++ if $row->{Type} eq 'sell';
-        $hash->{Bitcoin_Volume}       += $row->{Bitcoins};
-        $hash->{Bitcoin_Volume_Buys}  += $row->{Bitcoins} if $row->{Type} eq 'buy';
-        $hash->{Bitcoin_Volume_Sells} += $row->{Bitcoins} if $row->{Type} eq 'sell';
+    $Balances_Jpy{$idx} //= 0;
+    $Balances_Bitcoins{$idx} //= 0;
+    $Inventories{$idx} //= Business::Inventory::Valuation->new(method => 'LIFO');
+    $Paper_Gains{$idx} //= 0;
+    $Total_Realized_Gains{$idx} //= 0;
+
+    my $money = $row->{Money};
+    my $price = $row->{Money} / $row->{Bitcoins};
+
+    if ($row->{Type} eq 'buy') {
+        my $nett_bitcoins = $row->{Bitcoins} - $row->{Bitcoin_Fee};
+        my $nett_jpy = $row->{Money_Jpy};
+        $Balances_Bitcoins{$idx} += $nett_bitcoins;
+        $Balances_Jpy     {$idx} -= $nett_jpy;
+        $sth_set_balances->execute($Balances_Bitcoins{$idx}, $Balances_Jpy{$idx}, $rowid);
+
+        # TODO: balance can already be negative when buying
+        $Inventories{$idx}->buy($nett_bitcoins, $price);
+        my (undef, $avg_purchase_price) = $Inventories{$idx}->summary;
+        my $paper_gain = $Balances_Bitcoins{$idx} * ($price - $avg_purchase_price);
+        $sth_set_paper_gain->execute($paper_gain, $rowid);
+
+        # use previous value for total realized gain
+        $sth_set_realized_gains->execute(0, $Total_Realized_Gains{$idx}, $rowid);
+    } else { # sell
+        my (undef, $avg_purchase_price1) = $Inventories{$idx}->summary;
+
+        my $nett_bitcoins = $row->{Bitcoins};
+        my $nett_jpy = $row->{Money_Jpy} - $row->{Money_Fee_Jpy};
+        $Balances_Bitcoins{$idx} -= $nett_bitcoins;
+        $Balances_Jpy     {$idx} += $nett_jpy;
+        $sth_set_balances->execute($Balances_Bitcoins{$idx}, $Balances_Jpy{$idx}, $rowid);
+
+        if ($Balances_Bitcoins{$idx} >= 0) { # if we oversell, we can't calculate gains
+            $Inventories{$idx}->sell($nett_bitcoins, $price);
+
+            if (defined $avg_purchase_price1) {
+                my $tx_realized_gain = $nett_bitcoins * ($price - $avg_purchase_price1);
+                $Total_Realized_Gains{$idx} += $tx_realized_gain;
+                $sth_set_realized_gains->execute($tx_realized_gain, $Total_Realized_Gains{$idx}, $rowid);
+            }
+
+            my (undef, $avg_purchase_price2) = $Inventories{$idx}->summary;
+            my $paper_gain = defined($avg_purchase_price2) ?
+                $Balances_Bitcoins{$idx} * ($price - $avg_purchase_price2) : undef;
+            $sth_set_paper_gain->execute($paper_gain, $rowid);
+        }
     }
-}
-
-$progress->target( $progress->target + keys(%Trader_By_Index));
-$sth = $dbh->prepare("INSERT INTO _Trader_Index_Stats (`Index`, First_Trade_Stamp,Last_Trade_Stamp, Num_Trades,Num_Sells,Num_Buys, Bitcoin_Volume,Bitcoin_Volume_Sells,Bitcoin_Volume_Buys) VALUES (?, ?,?, ?,?,?, ?,?,?)");
-for my $index (sort keys %Trader_By_Index) {
-    $progress->update(message => "Inserting stat for Trader Index #$index");
-    my $hash = $Trader_By_Index{$index};
-    #use DD; dd $hash;
-    $sth->execute(
-        $index,
-        $hash->{First_Trade_Stamp}, $hash->{Last_Trade_Stamp},
-        $hash->{Num_Trades}, $hash->{Num_Sells}, $hash->{Num_Buys},
-        $hash->{Bitcoin_Volume}, $hash->{Bitcoin_Volume_Sells}, $hash->{Bitcoin_Volume_Buys},
-    );
-}
-
-$progress->target( $progress->target + keys(%Trader_By_User__));
-$sth = $dbh->prepare("INSERT INTO _Trader_User_Stats (User__, First_Trade_Stamp,Last_Trade_Stamp, Num_Trades,Num_Sells,Num_Buys, Bitcoin_Volume,Bitcoin_Volume_Sells,Bitcoin_Volume_Buys) VALUES (?, ?,?, ?,?,?, ?,?,?)");
-for my $user (sort keys %Trader_By_User__) {
-    $progress->update(message => "Inserting stat for Trader User__ #$user");
-    my $hash = $Trader_By_User__{$user};
-    $sth->execute(
-        $user,
-        $hash->{First_Trade_Stamp}, $hash->{Last_Trade_Stamp},
-        $hash->{Num_Trades}, $hash->{Num_Sells}, $hash->{Num_Buys},
-        $hash->{Bitcoin_Volume}, $hash->{Bitcoin_Volume_Sells}, $hash->{Bitcoin_Volume_Buys},
-    );
 }
 
 $progress->finish;

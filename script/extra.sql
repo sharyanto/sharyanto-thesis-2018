@@ -49,15 +49,22 @@ CREATE TABLE _Trade2 (
     Bitcoin_Fee DOUBLE NOT NULL,     -- [15] fees in bitcoins (only when type=buy)
     Bitcoin_Fee_Jpy DOUBLE NOT NULL, -- [16] fess in bitcoins in JPY
     User_Country CHAR(2),            -- [17]
-    User_State CHAR(2),               -- [18]
+    User_State CHAR(2),              -- [18]
 
-    Balance_Bitcoins DOUBLE NOT NULL,
-    Balance_USD DOUBLE NOT NULL,
-    Avg_Purchase_Price DOUBLE
-    -- Tx_Paper_Gain DOUBLE,
-    -- Tx_Realized_Gain DOUBLE,
-    -- Total_Paper_Gain DOUBLE,
-    -- Total_Realized_Gain DOUBLE
+    -- the below columns are for testing/experimenting. since we do not know the
+    -- beginning balance, the available data for deposits (and withdraws) are
+    -- also from ~2011-04-01 (mtgox operates since jul 2010). thus we cannot
+    -- reliably say that a user is currently in paper gain/loss position (except
+    -- for the bitcoins that he bought in the period of 2011-04 or later) or
+    -- whether he is realizing gain/loss (except, again. for the bitcoins that
+    -- he bought in the period of 2011-04).
+
+    Balance_Bitcoins DOUBLE NOT NULL,-- running balance of bitcoins after this transaction
+    Balance_Jpy DOUBLE NOT NULL,     -- running balance of fiat after this transaction (in JPY, since Mt Gox already keeps fiat amount in JPY)
+    Avg_Purchase_Price DOUBLE,       -- current average purchase price (in JPY), NULL if zero/negative bitcoin balance
+    Paper_Gain DOUBLE,               -- running paper gain (in JPY), = Balance_Bitcoins * (current_BTC_price in JPY - Avg_Purchase_Price). can be negative or NULL when Avg_Purchase_Price is NULL.
+    Tx_Realized_Gain DOUBLE,         -- (only when type=sell) gain realized in this transaction (in JPY), = Bitcoins * (). can be negative or NULL when type!=sell or Avg_Purchase_Price is NULL.
+    Total_Realized_Gain DOUBLE       -- running total of Tx_Realized_Gain
 
 ) ENGINE='MyISAM';
 
@@ -96,6 +103,6 @@ CREATE TABLE _Index_With_Duplicate_Users_In_Trade (
   User__ CHAR(36) NOT NULL
 );
 INSERT INTO _Index_With_Duplicate_Users_In_Trade
-  SELECT DISTINCT `Index`, User__ FROM Trade WHERE User<>'' AND `Index` IN (
+  SELECT DISTINCT `Index`, User__ FROM Trade WHERE User__<>'' AND `Index` IN (
     SELECT `Index` from Trade WHERE User__<>'' GROUP BY `Index` HAVING COUNT(DISTINCT User__) > 1
   );

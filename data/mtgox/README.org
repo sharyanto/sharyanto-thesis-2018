@@ -112,6 +112,8 @@ While the latter format has two additional columns after the ~Index~ column:
 
 ** Columns
 
+*** Index, User__, User_Id_Hash
+
 There are three columns that seem to associate balance or transaction with
 account/user: Index, User__, and User_Id_Hash. (Note that the Index column in
 this table is not the same as Index column in the User_Wallet table; use User__
@@ -132,6 +134,27 @@ the Index. Earlier trade data (from Apr 1, 2011 to as late as Apr 16, 2013
 appropriate to use Index as the ID for user accounts.
 
 For more details about the columns, see the ~script/import-trades~ script.
+
+*** Bitcoins, Money, Money_Jpy, Money_Rate, Bitcoin_Fee, Bitcoin_Fee_Jpy, Money_Fee, Money_Fee_Jpy, Money_Fee_Rate
+
+~Bitcoins~ is the amount of BTC being sold/purchased. ~Money~ is the amount of
+fiat money in the ~Currency__~ currency being used to buy/purchase. (~Money~ /
+~Bitcoins~) is equal to the market price of bitcoin at the time of trading.
+
+~Money_Jpy~ is just Money converted to JPY using the rate specified in
+~Money_Rate~.
+
+Buying will sometimes (normally when acting as a market taker, as is usual in
+exchanges) incur a fee, which in Mt. Gox is specified in bitcoins. So the actual
+bitcoins that the trader gets is ~Bitcoins~ minus ~Bitcoin_Fee~.
+
+~Bitcoin_Fee_Jpy~ is just ~Bitcoin_Fee~ converted to JPY, which for some reason
+is slightly different than the trading price of bitcoin (~Money~ x ~Bitcoins~ x
+~Money_Rate~).
+
+Selling will also sometimes incur a fee which is specified in fiat currency,
+~Money_Fee~. So the actual amount of fiat money that the trader gets is ~Money~
+minus ~Money_Fee~. ~Money_Fee_Jpy~ is just ~Money_Fee~ converted to JPY.
 
 ** Deduplication
 
