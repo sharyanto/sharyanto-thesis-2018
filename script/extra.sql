@@ -69,8 +69,33 @@ CREATE INDEX _Trade2_User__       ON _Trade2(User__);
 
 CREATE INDEX Price_Stamp ON Price(Stamp);
 
+-- list of unique User__ values in trade data
+CREATE TABLE _Trade_Users (
+    User__ CHAR(36) NOT NULL PRIMARY KEY
+);
+INSERT INTO _Trade_Users SELECT DISTINCT User__ FROM Trade;
+
+-- list of unique index values in trade data
+CREATE TABLE _Trade_Indexes (
+    `Index` INT NOT NULL PRIMARY KEY
+);
+INSERT INTO _Trade_Indexes SELECT DISTINCT `Index` FROM Trade;
+
+---
+
 CREATE TABLE _Trade2_By_Currency (
   Currency__ CHAR(3) NOT NULL,
   Count INT NOT NULL
 );
-INSERT INTO _Trade_By_Currency (`Index`,Note) SELECT DISTINCT `Index`, 'bot'  FROM Trade WHERE User_Country='??' AND User_State='??';
+INSERT INTO _Trade2_By_Currency (`Index`,Note) SELECT DISTINCT `Index`, 'bot'  FROM Trade WHERE User_Country='??' AND User_State='??';
+
+---
+
+CREATE TABLE _Index_With_Duplicate_Users_In_Trade (
+  `Index` INT NOT NULL,
+  User__ CHAR(36) NOT NULL
+);
+INSERT INTO _Index_With_Duplicate_Users_In_Trade
+  SELECT DISTINCT `Index`, User__ FROM Trade WHERE User<>'' AND `Index` IN (
+    SELECT `Index` from Trade WHERE User__<>'' GROUP BY `Index` HAVING COUNT(DISTINCT User__) > 1
+  );

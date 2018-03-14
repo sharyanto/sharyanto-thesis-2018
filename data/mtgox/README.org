@@ -44,34 +44,6 @@ There are no timezone information for the timestamps, either in the balances
 data dump nor the trade .CSV files. Nor does [[https://willyreport.wordpress.com][The Willy Report]] mention about time
 zone. But a [[http://blog.wizsec.jp/2015/02/mtgox-investigation-release.html][follow up study]] seems to indicate that the timestamps are in UTC.
 
-** The Index and User__ columns
-
-There are three columns that seem to associate balance or transaction with
-account/user: Index, User__, and User_Id_Hash. User_Id_Hash looks like some form
-of hash of User__: each unique User__ maps to another unique User_Id_Hash. So
-for the purpose of identifying user, we will only take a look at Index and/or
-User__ columns.
-
-At a glance, the Index column looks like it represents a numeric account ID just
-like the User__ and User_Id_Hash columns (which are longer, less convenient, hex
-GUIDs), but a closer look reveals that Index values are not unique for different
-users/accounts.
-
-In the User_Wallet table, a total of 1880 Index'es are associated with two or
-more User__'s. In fact, some low-value Index (<= 40) are each associated with
-thousands of different User__'s.
-
-In the Trade table, a total of 75 Index values (all low-value Index'es, <= 628)
-are associated with two different User__'s.
-
-Unfortunately, not all trade data include User__ information; some only contain
-the Index. Earlier trade data (from Apr 1, 2011 to as late as Apr 16, 2013
-05:24:05 UTC) only include Index, while latter trade data (as early as Nov 1,
-2012 00:00:48 UTC to the latest on Nov 30, 2013) include User__. So we have a
-contiguous period between Apr 16, 2013 to Nov 30, 2013 (~32 weeks) where the
-users are identified by User__ and that is the period we will use when we are
-categorizing users.
-
 * The balances data (User_Wallet table)
 
 The user balances are in the mtgox_balances (an output of "mysql" command-line
@@ -95,10 +67,25 @@ records:
 The bitcoin balances are in satoshis (1E8), JPY and SEK are 1E3, all other fiat
 is 1E5 ([[https://www.reddit.com/r/Bitcoin/comments/1zzwz1/look_up_your_mtgox_balances/cfyjlsp/][ref]]).
 
+** Columns
+
+The Index column does not uniquely identify wallets or users in this table. A
+total of 1880 Index'es are associated with two or more User__'s. In fact, some
+low-value Index (<= 40) are each associated with thousands of different
+User__'s.
+
 ** Summary statistics
 
 After importing, the table contains 189,373 rows representing 189,373 separate
 wallets of 128,166 unique users (User__) and 3663 unique Index'es.
+
+** Completeness
+
+The balances data does not contain balance for 14,486 unique User__ values that
+are involved in trading. On the other hand, there are 44,707 distinct User__
+values that are never seen in the trade data. This means that for a significant
+number of User__'s involved in trade (a total of 97,944 unique User__ value),
+there are no balance data.
 
 * The trade data (Trade table)
 
@@ -122,6 +109,27 @@ contains these columns:
 While the latter format has two additional columns after the ~Index~ column:
 
 : User__, User_Id_Hash
+
+** Columns
+
+There are three columns that seem to associate balance or transaction with
+account/user: Index, User__, and User_Id_Hash. (Note that the Index column in
+this table is not the same as Index column in the User_Wallet table; use User__
+column to correlate between the two.) User_Id_Hash looks like some form of hash
+of User__: each unique User__ maps to another unique User_Id_Hash. So for the
+purpose of identifying user, we will only take a look at Index and/or User__
+columns.
+
+A total of 75 Index values (all low-value Index'es, <= 628) are associated with
+two different User__'s. There are no Index that are associated with three or
+more different User__ values. If we connect the duplicate User__ values, they
+refer to wallet of different currencies (JPY vs USD).
+
+Unfortunately, not all trade data include User__ information; some only contain
+the Index. Earlier trade data (from Apr 1, 2011 to as late as Apr 16, 2013
+05:24:05 UTC) only include Index, while latter trade data (as early as Nov 1,
+2012 00:00:48 UTC to the latest on Nov 30, 2013) include User__. It is then more
+appropriate to use Index as the ID for user accounts.
 
 For more details about the columns, see the ~script/import-trades~ script.
 
