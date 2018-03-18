@@ -1,0 +1,120 @@
+#!/usr/bin/env perl
+
+# Before running this script, you have to already run the import-* scripts and
+# extra.sql. Also install the required CPAN modules.
+
+use 5.010001;
+use strict;
+use warnings;
+use FindBin '$Bin';
+use Log::ger::Output 'Screen';
+use Log::ger::Level::trace;
+use Log::ger::Level::FromEnv;
+use Log::ger;
+
+use DBIx::Connect::MySQL;
+use IPC::System::Options 'readpipe', -log=>1;
+use Progress::Any '$progress';
+use Progress::Any::Output 'TermProgressBarColor';
+
+my $dbh = DBIx::Connect::MySQL->connect(
+    "dbi:mysql:database=mtgox", undef, undef, {RaiseError=>1});
+$dbh->do("SET time_zone = '+00:00'");
+
+my $t1 = '2011-04-05 00:00:00';
+my $t2 = '2011-11-19 23:59:59';
+
+# step 0. get price of bitcoin at t2.
+my $price_t2;
+{
+    (my $t2_iso = "${t2}Z") =~ s/ /T/;
+    $price_t2 = `$Bin/lookup-historical-bitcoin-price '$t2_iso'`;
+}
+log_trace "0. Got price of bitcoin at t2 = %.8f", $price_t2;
+
+# step 1. find the most recent buy transaction before or at t1 where there is no
+# sell transaction after that transaction before t1. we want to compare the
+# returns of a buy-and-hold (B&H) strategy between t1 & t2 vs frequent trading
+# strategy.
+
+log_trace "1. Filtering users that have buy transaction <= t1 and no sell after that until t1 ...";
+
+my %Buy_Rowids; # key = Index
+if (0) { # testing
+    #$Buy_Rowids{100} = 31;
+    $Buy_Rowids{4247} = 77;
+} else {
+    my $sth = $dbh->prepare(<<_);
+SELECT
+  `Index`,
+  (SELECT _rowid FROM _Trade2 WHERE `Index`=tbi.Index AND Type='buy' AND Stamp <= '$t1' ORDER BY Stamp DESC LIMIT 1) Buy_Tx
+FROM _Trade2_By_Index tbi
+WHERE
+  First_Buy_Stamp <= '$t1'
+  AND NOT EXISTS (
+    SELECT Stamp FROM _Trade2
+    WHERE `Index`=tbi.Index AND Type='sell'
+      AND Stamp <= '$t1' AND Stamp >= (SELECT Stamp FROM _Trade2 WHERE `Index`=tbi.Index AND Type='buy' AND Stamp <= '$t1' ORDER BY Stamp DESC LIMIT 1)
+    ORDER BY Stamp DESC LIMIT 1)
+_
+    $sth->execute;
+    while (my @row = $sth->fetchrow_array) { $Buy_Rowids{$row[0]} = $row[1] }
+}
+log_trace "Number of users (1): %d", scalar(keys %Buy_Rowids);
+
+# testing
+delete $Buy_Rowids{213};
+
+my %Freqs;
+my %Returns;
+log_trace "2. Listing users' transactions (including first buy) between t1 & t2 ...";
+$progress->target(scalar(keys %Buy_Rowids));
+for my $idx (sort keys %Buy_Rowids) {
+    $progress->update(message => "Processing User Index #$idx");
+    my $sth = $dbh->prepare(<<_);
+SELECT
+  *
+FROM _Trade2
+WHERE
+  `Index`=$idx
+  AND (_rowid=$Buy_Rowids{$idx} OR Stamp BETWEEN '$t1' AND '$t2')
+ORDER BY Stamp, _rowid DESC
+_
+    $sth->execute;
+    my $num_tx = 0;
+    my $total_btc_bought = 0;
+    my $total_btc_bought_book_value = 0;
+    my $total_btc_sold = 0;
+    my $total_btc_sold_book_value = 0;
+    while (my $row = $sth->fetchrow_hashref) {
+        $num_tx++;
+        next unless $row->{Bitcoins} > 0; # a couple of rows has zero bitcoins
+        my $price = $row->{Money_Jpy} / $row->{Bitcoins};
+        if ($row->{Type} eq 'buy') {
+            my $net_btc = $row->{Bitcoins} - $row->{Bitcoin_Fee};
+            $total_btc_bought += $net_btc;
+            $total_btc_bought_book_value += $net_btc * $price;
+        } else {
+            my $fraction = $row->{Bitcoins_Sold} / $row->{Bitcoins};
+            $total_btc_sold += $row->{Bitcoins_Sold};
+            $total_btc_sold_book_value += $fraction * ($row->{Money_Jpy} - $row->{Money_Fee_Jpy});
+        }
+    }
+    my $btc_remaining = $total_btc_bought - $total_btc_sold;
+    my $btc_remaining_market_value = $btc_remaining * $price_t2;
+    my $orig_value = $total_btc_bought_book_value;
+    my $final_value = ($btc_remaining_market_value + $total_btc_sold_book_value);
+    my $return = ($final_value - $orig_value) / $orig_value;
+    log_trace "User %6d: total btc bought=%.8f, book value=%.3f | total btc sold=%.8f, book value=%.3f | btc remaming=%.8f, market value=%.3f | final_value=%.3f, orig_value=%.3f, return=%.3f",
+        $idx, $total_btc_bought, $total_btc_bought_book_value,
+        $total_btc_sold, $total_btc_sold_book_value,
+        $btc_remaining, $btc_remaining_market_value,
+        $return;
+    $Freqs{$idx} = $num_tx;
+    $Returns{$idx} = $return;
+}
+
+print "Frequency,Return,Index\n";
+for my $idx (keys %Freqs) {
+    print "$Freqs{$idx},$Returns{$idx},$idx\n";
+}

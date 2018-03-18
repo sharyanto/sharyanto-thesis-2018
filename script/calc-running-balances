@@ -7,6 +7,9 @@ use 5.010001;
 use strict;
 use warnings;
 use FindBin '$Bin';
+use Log::ger::Output 'Screen';
+use Log::ger::Level::debug;
+use Log::ger::Level::FromEnv;
 use Log::ger;
 
 use Business::Inventory::Valuation;
@@ -19,80 +22,224 @@ my $dbh = DBIx::Connect::MySQL->connect(
     "dbi:mysql:database=mtgox", undef, undef, {RaiseError=>1});
 $dbh->do("SET time_zone = '+00:00'");
 
+# this is just too big, we need to split it per Index value
 #my $sth = $dbh->prepare("SELECT *, UNIX_TIMESTAMP(Stamp) AS Unix_Time FROM _Trade2 ORDER BY Stamp");
-#$sth->execute;
 
-my $sth = $dbh->prepare("SELECT *, UNIX_TIMESTAMP(Stamp) AS Unix_Time FROM _Trade2 ORDER BY Stamp LIMIT 1000");
+my @Indexes;
+my $sth = $dbh->prepare("SELECT DISTINCT `Index` FROM _Trade2");
 $sth->execute;
+while (my @row = $sth->fetchrow_array) { push @Indexes, $row[0] }
 
-my %Balances_Jpy     ; # key = Index, value = fiat balance in JPY
-my %Balances_Bitcoins; # key = Index, value = bitcoin balance
-my %Inventories      ; # key = Index, value = Business::Inventory::Valuation object
-my %Paper_Gains           ; # key = Index
-my %Total_Realized_Gains  ; # key = Index
+# testing
+#@Indexes = (4247);
+
+# testing
+# @Indexes = qw(
+# 722
+# 3086
+# 3341
+# 3605
+# 3886
+# 3931
+# 3535
+# 3443
+# 131
+# 1559
+# 31
+# 100
+# 3954
+# 2496
+# 3971
+# 3763
+# 895
+# 3473
+# 258
+# 1638
+# 4247
+# 1868
+# 2654
+# 3641
+# 3468
+# 1425
+# 646
+# 3466
+# 3794
+# 4020
+# 2204
+# 4047
+# 151
+# 2429
+# 2981
+# 337
+# 2486
+# 3576
+# 3817
+# 512
+# 2302
+# 2185
+# 659
+# 914
+# 3609
+# 2513
+# 2708
+# 2
+# 2596
+# 2635
+# 3403
+# 4139
+# 2413
+# 247
+# 3239
+# 602
+# 956
+# 1375
+# 591
+# 658
+# 3985
+# 367
+# 1247
+# 2579
+# 3470
+# 3243
+# 929
+# 1061
+# 600
+# 1280
+# 2310
+# 1658
+# 1471
+# 707
+# 1087
+# 2946
+# 47
+# 1107
+# 682
+# 2718
+# 4369
+# 63
+# 3682
+# 1608
+# 698
+# 122
+# 1496
+# 3111
+# 3258
+# 1353
+# 199
+# 154
+# 980
+# 330
+# 388
+# 101
+# 1136
+# 3529
+# 1076
+#          );
 
 my $sth_set_balances       = $dbh->prepare("UPDATE _Trade2 SET Balance_Bitcoins=?, Balance_Jpy=? WHERE _rowid=?");
-my $sth_set_paper_gain     = $dbh->prepare("UPDATE _Trade2 SET Paper_Gain=? WHERE _rowid=?");
-my $sth_set_realized_gains = $dbh->prepare("UPDATE _Trade2 SET Tx_Realized_Gain=?, Total_Realized_Gain=? WHERE _rowid=?");
+my $sth_set_paper_gains    = $dbh->prepare("UPDATE _Trade2 SET Balance_Bitcoins_Book_Value=?, Balance_Bitcoins_Market_Value=?, Avg_Purchase_Price=?, Paper_Gain=? WHERE _rowid=?");
+my $sth_set_realized_gains = $dbh->prepare("UPDATE _Trade2 SET Bitcoins_Sold=?, Tx_Realized_Gain=?, Total_Realized_Gain=? WHERE _rowid=?");
 
-my $i = 0;
-while (my $row = $sth->fetchrow_hashref) {
-    $i++;
-    next if $row->{Bitcoins} == 0; # a couple of rows has this, probably due to rounding. ignore these rows.
+my %User_Has_Bought  ; # key = Index, value = bool
+my %Balances_Jpy     ; # key = Index, value = fiat balance in JPY
+my %Inventories      ; # key = Index, value = Business::Inventory::Valuation object
+my %Total_Realized_Gains  ; # key = Index
 
-    $progress->update(message => "Processing row #$i");
+$progress->target(~~@Indexes);
+for my $idx (@Indexes) {
+    $progress->update(message => "Processing user ID #$idx");
+    my $sth = $dbh->prepare("SELECT *, UNIX_TIMESTAMP(Stamp) AS Unix_Time FROM _Trade2 WHERE `Index`=? ORDER BY Stamp");
+    $sth->execute($idx);
 
-    my $rowid = $row->{_rowid};
-    my $idx = $row->{Index};
+    my @rows;
+    while (my $row = $sth->fetchrow_hashref) {
+        next if $row->{Bitcoins} == 0; # a couple of rows has this, probably due to rounding. ignore these rows.
+        push @rows, $row;
+    }
 
-    $Balances_Jpy{$idx} //= 0;
-    $Balances_Bitcoins{$idx} //= 0;
-    $Inventories{$idx} //= Business::Inventory::Valuation->new(method => 'LIFO');
-    $Paper_Gains{$idx} //= 0;
-    $Total_Realized_Gains{$idx} //= 0;
+    $progress->target( $progress->target + @rows);
 
-    my $money = $row->{Money};
-    my $price = $row->{Money} / $row->{Bitcoins};
+    for my $row (@rows) {
+        my $rowid = $row->{_rowid};
+        $progress->update(message => "Processing row ID ($rowid) # (user ID #$idx)");
 
-    if ($row->{Type} eq 'buy') {
-        my $nett_bitcoins = $row->{Bitcoins} - $row->{Bitcoin_Fee};
-        my $nett_jpy = $row->{Money_Jpy};
-        $Balances_Bitcoins{$idx} += $nett_bitcoins;
-        $Balances_Jpy     {$idx} -= $nett_jpy;
-        $sth_set_balances->execute($Balances_Bitcoins{$idx}, $Balances_Jpy{$idx}, $rowid);
+        # we shall begin balance when user first bought
+        $User_Has_Bought{$idx}++ if $row->{Type} eq 'buy';
+        next unless $User_Has_Bought{$idx};
 
-        # TODO: balance can already be negative when buying
-        $Inventories{$idx}->buy($nett_bitcoins, $price);
-        my (undef, $avg_purchase_price) = $Inventories{$idx}->summary;
-        my $paper_gain = $Balances_Bitcoins{$idx} * ($price - $avg_purchase_price);
-        $sth_set_paper_gain->execute($paper_gain, $rowid);
+        $Balances_Jpy{$idx} //= 0;
+        $Inventories{$idx} //= Business::Inventory::Valuation->new(
+            method => 'weighted average', allow_negative_inventory=>1);
+        $Total_Realized_Gains{$idx} //= 0;
 
-        # use previous value for total realized gain
-        $sth_set_realized_gains->execute(0, $Total_Realized_Gains{$idx}, $rowid);
-    } else { # sell
-        my (undef, $avg_purchase_price1) = $Inventories{$idx}->summary;
+        my $biv = $Inventories{$idx};
 
-        my $nett_bitcoins = $row->{Bitcoins};
-        my $nett_jpy = $row->{Money_Jpy} - $row->{Money_Fee_Jpy};
-        $Balances_Bitcoins{$idx} -= $nett_bitcoins;
-        $Balances_Jpy     {$idx} += $nett_jpy;
-        $sth_set_balances->execute($Balances_Bitcoins{$idx}, $Balances_Jpy{$idx}, $rowid);
+        # current bitcoin price in Jpy
+        my $price = $row->{Money_Jpy} / $row->{Bitcoins};
 
-        if ($Balances_Bitcoins{$idx} >= 0) { # if we oversell, we can't calculate gains
-            $Inventories{$idx}->sell($nett_bitcoins, $price);
+        #log_trace "%s", $row;
 
-            if (defined $avg_purchase_price1) {
-                my $tx_realized_gain = $nett_bitcoins * ($price - $avg_purchase_price1);
-                $Total_Realized_Gains{$idx} += $tx_realized_gain;
-                $sth_set_realized_gains->execute($tx_realized_gain, $Total_Realized_Gains{$idx}, $rowid);
+        if ($row->{Type} eq 'buy') {
+
+            my $nett_bitcoins = $row->{Bitcoins} - $row->{Bitcoin_Fee};
+            $biv->buy($nett_bitcoins, $price) if $nett_bitcoins > 0;
+            my $nett_jpy = $row->{Money_Jpy};
+            $Balances_Jpy{$idx} -= $nett_jpy;
+            $sth_set_balances->execute($biv->units, $Balances_Jpy{$idx}, $rowid);
+            my $avg_purchase_price = $biv->average_purchase_price;
+            my $book_value   = $biv->units * $avg_purchase_price;
+            my $market_value = $biv->units * $price;
+            $sth_set_paper_gains->execute(
+                $book_value,
+                $market_value,
+                $avg_purchase_price,
+                ($market_value - $book_value), # paper gain
+                $rowid,
+            );
+
+            log_trace "BUY: Index=%6d | bitcoins=%.8f",
+                $idx, $row->{Bitcoins};
+
+            # use previous value for total realized gain
+            $sth_set_realized_gains->execute(0, 0, $Total_Realized_Gains{$idx}, $rowid);
+
+        } else { # sell
+
+            my ($profit1, $profit2, $actual_units_sold) = $biv->sell($row->{Bitcoins}, $price);
+            # since there might be overselling, we only add money balance from
+            # units actually sold
+            my $fraction = $actual_units_sold / $row->{Bitcoins};
+            my $nett_jpy = $fraction * ($row->{Money_Jpy} - $row->{Money_Fee_Jpy});
+            my $nett_profit = defined($profit1) ? $profit1 - $fraction*$row->{Money_Fee_Jpy} : undef;
+            log_trace "SELL: Index=%6d | bitcoins=%.8f, actual_units_sold=%.8f, fraction=%.5f, nett_profit=%.3f",
+                $idx, $row->{Bitcoins}, $actual_units_sold, $fraction, $nett_profit;
+
+            $Balances_Jpy{$idx} += $nett_jpy;
+            $sth_set_balances->execute($biv->units, $Balances_Jpy{$idx}, $rowid);
+
+            if ($biv->units) {
+                my $avg_purchase_price = $biv->average_purchase_price;
+                my $book_value   = $biv->units * $avg_purchase_price;
+                my $market_value = $biv->units * $price;
+                $sth_set_paper_gains->execute(
+                    $book_value,
+                    $market_value,
+                    $avg_purchase_price,
+                    ($market_value - $book_value), # paper gain
+                    $rowid,
+                );
             }
 
-            my (undef, $avg_purchase_price2) = $Inventories{$idx}->summary;
-            my $paper_gain = defined($avg_purchase_price2) ?
-                $Balances_Bitcoins{$idx} * ($price - $avg_purchase_price2) : undef;
-            $sth_set_paper_gain->execute($paper_gain, $rowid);
+            $Total_Realized_Gains{$idx} += $nett_profit if defined $nett_profit;
+            $sth_set_realized_gains->execute(
+                $actual_units_sold,
+                $nett_profit,
+                $Total_Realized_Gains{$idx},
+                $rowid,
+            );
+
         }
-    }
-}
+    } # while row
+} # for index
 
 $progress->finish;

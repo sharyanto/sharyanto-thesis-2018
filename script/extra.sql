@@ -27,7 +27,8 @@ INSERT INTO _Index_Exclude VALUES (-2, 'THK');
 -- User_State='??' are those initiated by bots
 INSERT INTO _Index_Exclude (`Index`,Note) SELECT DISTINCT `Index`, 'bot'  FROM Trade WHERE User_Country='??' AND User_State='??';
 
--- this is trades which have excluded bots and special transactions
+-- this is trades which have excluded bots and special transactions. the columns
+-- are the same as Trade, but with some extra columns that contain statistics
 
 CREATE TABLE _Trade2 (
     _rowid INT NOT NULL PRIMARY KEY,
@@ -51,24 +52,38 @@ CREATE TABLE _Trade2 (
     User_Country CHAR(2),            -- [17]
     User_State CHAR(2),              -- [18]
 
-    -- the below columns are for testing/experimenting. since we do not know the
-    -- beginning balance, the available data for deposits (and withdraws) are
-    -- also from ~2011-04-01 (mtgox operates since jul 2010). thus we cannot
-    -- reliably say that a user is currently in paper gain/loss position (except
-    -- for the bitcoins that he bought in the period of 2011-04 or later) or
-    -- whether he is realizing gain/loss (except, again. for the bitcoins that
-    -- he bought in the period of 2011-04).
+    -- since we do not know the beginning balance before 2011-04-01, and the
+    -- transfer data (withdraw/deposit of bitcoins) from Mt Gox leaked database
+    -- dump also doesn't contain data for all users involved in trading, the
+    -- below balance and gain/loss only concern with bitcoins bought/sold on Mt
+    -- Gox in the period of 2011-04 to 2013-11, and the fiat money produced from
+    -- selling those bitcoins.
 
-    Balance_Bitcoins DOUBLE NOT NULL,-- running balance of bitcoins after this transaction
-    Balance_Jpy DOUBLE NOT NULL,     -- running balance of fiat after this transaction (in JPY, since Mt Gox already keeps fiat amount in JPY)
-    Avg_Purchase_Price DOUBLE,       -- current average purchase price (in JPY), NULL if zero/negative bitcoin balance
-    Paper_Gain DOUBLE,               -- running paper gain (in JPY), = Balance_Bitcoins * (current_BTC_price in JPY - Avg_Purchase_Price). can be negative or NULL when Avg_Purchase_Price is NULL.
-    Tx_Realized_Gain DOUBLE,         -- (only when type=sell) gain realized in this transaction (in JPY), = Bitcoins * (). can be negative or NULL when type!=sell or Avg_Purchase_Price is NULL.
-    Total_Realized_Gain DOUBLE       -- running total of Tx_Realized_Gain
+    Balance_Bitcoins DOUBLE NOT NULL,     -- current inventory of bitcoins after this transaction.
+
+    -- note that when there is overselling, we assume the excess to be amount of
+    -- bitcoins purchased before 2011-04 or deposited from other exchanges and
+    -- ignored that amount. balance will be set to 0 instead of negative. this
+    -- also means this balance_bitcoins does not include amount from before
+    -- 2011-04 or transferred from other exchanges, because we don't have data
+    -- for those.
+
+    Balance_Bitcoins_Book_Value   DOUBLE, -- worth of running balance of bitcoins, in JPY, in terms of bitcoin purchase price. NULL if negative balance.
+    Balance_Bitcoins_Market_Value DOUBLE, -- worth of running balance of bitcoins, in JPY, in terms of current bitcoin price. NULL if negative balance.
+    Avg_Purchase_Price DOUBLE,            -- NULL if zero or negative balance.
+    Paper_Gain DOUBLE,                    -- calculated as Balance_Bitcoins_Market_Value - Balance_Bitcoins_Book_Value. NULL if negative balance.
+
+    Balance_Jpy DOUBLE NOT NULL,          -- running balance of fiat after this transaction (in JPY, since Mt Gox already keeps fiat amount in JPY).
+
+    Bitcoins_Sold DOUBLE NOT NULL,        -- (only when type=sell) bitcoins sold, which is the same as Bitcoins unless when overselling where this will be only be the amount of balance available previous to this transaction.
+    Tx_Realized_Gain DOUBLE,              -- (only when type=sell) gain realized in this transaction (in JPY), = Bitcoins * (Average_Purchase_Price). can be negative or NULL when type!=sell or Avg_Purchase_Price is NULL.
+    Total_Realized_Gain DOUBLE            -- running total of Tx_Realized_Gain
 
 ) ENGINE='MyISAM';
 
-INSERT INTO _Trade2 SELECT * FROM Trade WHERE `Index` NOT IN (SELECT `Index` FROM _Index_Exclude);
+INSERT INTO _Trade2
+  SELECT *, 0, NULL, NULL, NULL, NULL, 0, NULL, NULL
+  FROM Trade WHERE `Index` NOT IN (SELECT `Index` FROM _Index_Exclude);
 
 CREATE INDEX _Trade2_Stamp        ON _Trade2(Stamp);
 CREATE INDEX _Trade2_Index        ON _Trade2(`Index`);
@@ -77,24 +92,86 @@ CREATE INDEX _Trade2_User__       ON _Trade2(User__);
 CREATE INDEX Price_Stamp ON Price(Stamp);
 
 -- list of unique User__ values in trade data
-CREATE TABLE _Trade_Users (
+CREATE TABLE _Trade_User (
     User__ CHAR(36) NOT NULL PRIMARY KEY
 );
-INSERT INTO _Trade_Users SELECT DISTINCT User__ FROM Trade;
+INSERT INTO _Trade_User SELECT DISTINCT User__ FROM Trade;
 
 -- list of unique index values in trade data
-CREATE TABLE _Trade_Indexes (
+CREATE TABLE _Trade_Index (
     `Index` INT NOT NULL PRIMARY KEY
 );
-INSERT INTO _Trade_Indexes SELECT DISTINCT `Index` FROM Trade;
+INSERT INTO _Trade_Index SELECT DISTINCT `Index` FROM Trade;
+
+---
+
+CREATE TABLE _Trade2_By_Index (
+  `Index` INT NOT NULL,
+  First_Trade_Stamp DATETIME,
+  First_Buy_Stamp DATETIME,
+  First_Sell_Stamp DATETIME,
+  Last_Trade_Stamp DATETIME,
+  Last_Buy_Stamp DATETIME,
+  Last_Sell_Stamp DATETIME,
+  Num_Trades INT NOT NULL,
+  Num_Buys INT NOT NULL,
+  Num_Sells INT NOT NULL,
+  Trade_Volume_Bitcoins DOUBLE NOT NULL,
+  Buy_Volume_Bitcoins DOUBLE NOT NULL,
+  Sell_Volume_Bitcoins DOUBLE NOT NULL,
+  Trade_Volume_Jpy DOUBLE NOT NULL,
+  Buy_Volume_Jpy DOUBLE NOT NULL,
+  Sell_Volume_Jpy DOUBLE NOT NULL
+);
+INSERT INTO _Trade2_By_Index
+  SELECT
+    `Index`,
+    MIN(Stamp),
+    MIN(IF(Type='buy',Stamp,NULL)),
+    MIN(IF(Type='sell',Stamp,NULL)),
+    MAX(Stamp),
+    MAX(IF(Type='buy',Stamp,NULL)),
+    MAX(IF(Type='sell',Stamp,NULL)),
+    COUNT(*),
+    SUM(IF(Type='buy',1,0)),
+    SUM(IF(Type='sell',1,0)),
+    SUM(Bitcoins),
+    SUM(IF(Type='buy',Bitcoins,0)),
+    SUM(IF(Type='sell',Bitcoins,0)),
+    SUM(Money_Jpy),
+    SUM(IF(Type='buy',Money_Jpy,0)),
+    SUM(IF(Type='sell',Money_Jpy,0))
+  FROM _Trade2 GROUP BY `Index`;
+
+CREATE UNIQUE INDEX _Trade2_By_Index_Index      ON _Trade2_By_Index(`Index`);
+CREATE INDEX _Trade2_By_Index_First_Trade_Stamp ON _Trade2_By_Index(First_Trade_Stamp);
+CREATE INDEX _Trade2_By_Index_Last_Trade_Stamp  ON _Trade2_By_Index(Last_Trade_Stamp);
+CREATE INDEX _Trade2_By_Index_First_Buy_Stamp   ON _Trade2_By_Index(First_Buy_Stamp);
+CREATE INDEX _Trade2_By_Index_Last_Buy_Stamp    ON _Trade2_By_Index(Last_Buy_Stamp);
+CREATE INDEX _Trade2_By_Index_First_Sell_Stamp  ON _Trade2_By_Index(First_Sell_Stamp);
+CREATE INDEX _Trade2_By_Index_Last_Sell_Stamp   ON _Trade2_By_Index(Last_Sell_Stamp);
 
 ---
 
 CREATE TABLE _Trade2_By_Currency (
   Currency__ CHAR(3) NOT NULL,
-  Count INT NOT NULL
+  Num_Buys INT NOT NULL,
+  Num_Sells INT NOT NULL,
+  Buy_Volume_Bitcoins DOUBLE NOT NULL,
+  Sell_Volume_Bitcoins DOUBLE NOT NULL,
+  Buy_Volume_Jpy DOUBLE NOT NULL,
+  Sell_Volume_Jpy DOUBLE NOT NULL
 );
-INSERT INTO _Trade2_By_Currency (`Index`,Note) SELECT DISTINCT `Index`, 'bot'  FROM Trade WHERE User_Country='??' AND User_State='??';
+INSERT INTO _Trade2_By_Currency
+  SELECT
+    Currency__,
+    SUM(IF(Type='buy',1,0)),
+    SUM(IF(Type='sell',1,0)),
+    SUM(IF(Type='buy',Bitcoins,0)),
+    SUM(IF(Type='sell',Bitcoins,0)),
+    SUM(IF(Type='buy',Money_Jpy,0)),
+    SUM(IF(Type='sell',Money_Jpy,0))
+  FROM _Trade2 GROUP BY Currency__;
 
 ---
 
@@ -106,3 +183,14 @@ INSERT INTO _Index_With_Duplicate_Users_In_Trade
   SELECT DISTINCT `Index`, User__ FROM Trade WHERE User__<>'' AND `Index` IN (
     SELECT `Index` from Trade WHERE User__<>'' GROUP BY `Index` HAVING COUNT(DISTINCT User__) > 1
   );
+
+---
+
+CREATE TABLE _Period (
+  Name VARCHAR(32) NOT NULL PRIMARY KEY,
+  Begin_Stamp DATETIME NOT NULL,
+  End_Stamp   DATETIME NOT NULL
+);
+INSERT INTO _Period VALUES ('bull1', '2011-04-01 00:28:54', '2011-06-08 23:59:59');
+INSERT INTO _Period VALUES ('bear1', '2011-06-09 00:00:00', '2011-11-19 23:59:59');
+INSERT INTO _Period VALUES ('bull2', '2011-11-20 00:00:00', '2013-11-30 23:59:55');

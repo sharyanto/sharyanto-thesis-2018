@@ -129,9 +129,10 @@ refer to wallet of different currencies (JPY vs USD).
 
 Unfortunately, not all trade data include User__ information; some only contain
 the Index. Earlier trade data (from Apr 1, 2011 to as late as Apr 16, 2013
-05:24:05 UTC) only include Index, while latter trade data (as early as Nov 1,
-2012 00:00:48 UTC to the latest on Nov 30, 2013) include User__. It is then more
-appropriate to use Index as the ID for user accounts.
+05:24:05 UTC) only include Index. Some trading records from Nov 1, 2012 00:00:48
+UTC already include User__ as well as Index, but even after that some records
+still do not contain User__. It is then more appropriate to use Index as the ID
+for user accounts.
 
 For more details about the columns, see the ~script/import-trades~ script.
 
@@ -198,7 +199,24 @@ and:
 : BTC bought: 17650.499699839987
 : USD spent: 2435224.24669
 
-so deduplication method used in The Willy Report is used.
+so deduplication methods used in Feder et al (2018) are likely to be too
+aggresive so it removes non-duplicate data.
+
+However, the Willy report method does not deduplicate entries that are very
+likely duplicates because they contain the same "Trade ID", e.g. this couple of
+lines from ~2011-04.csv~ and ~2011-04_mtgox_japan.csv~:
+
+: # in 2011-04.csv:
+: 35387,"2011-04-01 11:45:34",100,NJP,buy,USD,14.98,11.618,82.783135074259,961.77446329274,0,82.783135074259,0,0.097,6.4159327371914
+: 35387,"2011-04-01 11:45:34",3258,NJP,sell,USD,14.98,11.618,82.783135074259,961.77446329274,0.07549,82.783135074259,6.2492988667558,0,0
+
+: # in 2011-04_mtgox_japan.csv:
+: 35387,"2011-04-01 11:45:34",100,NJP,buy,USD,14.98,11.618,82.783,961.774,0,82.783,0,0,0
+: 35387,"2011-04-01 11:45:34",3258,NJP,sell,USD,14.98,11.618,82.783,961.774,0,82.783,0,0,0
+
+They only differ in the rounding of money amount. Thus, in addition to removing
+exact line duplicates, we choose to also remove records that have duplicate
+(Trade ID, Stamp, Index, Type, Money Rounded to 3 decimal digits) tuples.
 
 ** Importing
 
@@ -223,12 +241,30 @@ Note: Importing the trade data takes about 58 minutes on my Asus Zenbook UX305
 
 ** Summary statistics
 
-After importing, the table contains 21,229,003 rows. There are 97,944 unique
-User__ values, 127,233 unique Index values, 170 unique User_Country values (with
+After importing, the table contains 16,169,411 rows. There are 86,937 unique
+User__ values, 127,233 unique Index values, 167 unique User_Country values (with
 regular two-letter country codes as well as '' (empty), '!!', '??', 'A1', 'A2').
+
+* The trade data (_Trade2 table)
+
+The ~_Trade2~ table contains the same trade data as Trade table, except for
+trades from some user Indexes: deleted user, THK, and known bots (according to
+The Willy report, trades with User_Country='??' and User_State='??' are
+suspected to be performed by Mt Gox's own bots). Basically, ~_Trade2~ is an
+attempt to contain only trades by individual traders.
+
+The ~_Trade2~ table is created using script ~script/extra.sql~.
+
+** Summary statistics
+
+The ~_Trade2~ contains 15,481,655 rows, 127,182 unique Index values, 86,887
+unique User__ values, 167 unique User_Country values.
 
 * References
 
+** Anonymous. (2014, May 24).
+
+The Willy Report. Retrieved February 24, 2018, from https://willyreport.wordpress.com/
 ** Feder, A., Gandal, N., Hamrick, J. T., & Moore, T. (2018)
 
 Feder, A., Gandal, N., Hamrick, J. T., & Moore, T. (2018). Impact of DDoS and

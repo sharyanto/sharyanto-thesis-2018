@@ -3,7 +3,7 @@
 # Before running this script, please do the following:
 #
 # 1. Install these modules from CPAN: DBIx::Connect::MySQL, Progress::Any,
-#    Progres::Any::Output::TermProgressBarColor, App::nauniq.
+#    Progres::Any::Output::TermProgressBarColor.
 #
 # 2. Create a MySQL database called `mtgox` and create a ~/.my.cnf configuration
 #    file that contains access information to the database, e.g.:
@@ -11,11 +11,6 @@
 #    [client]
 #    user=root
 #    password=your_db_password
-#
-# 3. Extract the *.CSV files from the trades.zip inside MtGox2014Leak.zip file
-#    into the current directory. Note that for the month 2013-04, the *.CSV
-#    files are inside another .zip file and should be extracted into 2013-04/
-#    subdirectory.
 
 use 5.010001;
 use strict;
@@ -29,27 +24,13 @@ my $dbh = DBIx::Connect::MySQL->connect(
     "dbi:mysql:database=mtgox3", undef, undef, {RaiseError=>1});
 
 $dbh->do("
-CREATE TABLE IF NOT EXISTS Trade (
+CREATE TABLE IF NOT EXISTS Fxrate (
     _rowid INT NOT NULL PRIMARY KEY AUTO_INCREMENT,
-    Id BIGINT NOT NULL,              -- [ 0]
-    Stamp DATETIME,                  -- [ 1]
-    `Index` INT NOT NULL,            -- [ 2] only in format=2
-    User__ CHAR(36),                 -- [ 3] only in format=2
-    User_Id_Hash CHAR(36),           -- [ 4]
-    Japan CHAR(3) NOT NULL,          -- [ 5]
-    Type VARCHAR(4) NOT NULL,        -- [ 6]
-    Currency__ CHAR(3) NOT NULL,     -- [ 7]
-    Bitcoins DOUBLE NOT NULL,        -- [ 8] amount of bitcoins
-    Money DOUBLE NOT NULL,           -- [ 9] amount of money in Currency__
-    Money_Rate DOUBLE NOT NULL,      -- [10] exchange rate of Currency__ (e.g.  'USD', or 'EUR') against JPY
-    Money_Jpy DOUBLE NOT NULL,       -- [11] amount of money in JPY, = Money * Money_Rate
-    Money_Fee DOUBLE NOT NULL,       -- [12] fees in fiat currency (only when type='sell')
-    Money_Fee_Rate DOUBLE NOT NULL,  -- [13] like Money_Rate, in Currency__
-    Money_Fee_Jpy DOUBLE NOT NULL,   -- [14] = Money_Fee x Money_Fee_Rate
-    Bitcoin_Fee DOUBLE NOT NULL,     -- [15] fees in bitcoins (only when type=buy)
-    Bitcoin_Fee_Jpy DOUBLE NOT NULL, -- [16] fess in bitcoins in JPY
-    User_Country CHAR(2),            -- [17]
-    User_State CHAR(2)               -- [18]
+    Stamp DATEIME NOT NULL,
+    Currency1 CHAR(3) NOT NULL,
+    Currency2 CHAR(3) NOT NULL,
+    INDEX(Stamp, Currency1, Currency2),
+    Price DOUBLE NOT NULL -- 1 Currency1 = this much of Currency2
 ) ENGINE='MyISAM'
 ");
 
