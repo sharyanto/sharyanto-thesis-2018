@@ -4,7 +4,6 @@ use 5.010001;
 use strict;
 use warnings;
 use Log::ger;
-use FindBin '$Bin';
 
 use Perinci::CmdLine::Any;
 
@@ -12,29 +11,25 @@ our %SPEC;
 
 $SPEC{app} = {
     v => 1.1,
+    summary => 'Lookup historical spot rate of a currency against USD',
     args => {
-        date => {
-            schema => 'date*',
-            req => 1,
-            pos => 0,
-        },
         raw => {
             schema => 'bool*',
         },
         currency => {
-            summary => 'Lookup data in this currency',
             schema =>'str*',
-            default => 'USD',
+            pos => 0,
+            req => 1,
         },
-        convert_currency => {
-            summary => 'Convert price to this currency',
-            schema =>'str*',
-            default => 'USD',
+        date => {
+            schema => 'date*',
+            req => 1,
+            pos => 1,
         },
     },
     examples => [
         {
-            argv => [qw/2013-06-01T10:00:00Z/],
+            argv => [qw/JPY 2013-06-01T10:00:00Z/],
         },
     ],
 };
@@ -51,26 +46,18 @@ sub app {
     #$sth->execute($args{currency}, $args{date} - 86400, $args{date} + 86400, $args{date});
 
     # more debuggable
-    my $sth = $dbh->prepare("SELECT * From Price WHERE Currency__='$args{currency}' AND Stamp BETWEEN FROM_UNIXTIME(".($args{date} - 86400).") AND FROM_UNIXTIME(".($args{date} + 86400).") ORDER BY ABS(".($args{date})." - UNIX_TIMESTAMP(Stamp)) LIMIT 10");
+    my $sth = $dbh->prepare("SELECT * From Fxrate WHERE Currency1='$args{currency}' AND Currency2='USD' AND Stamp BETWEEN FROM_UNIXTIME(".($args{date} - 4*86400).") AND FROM_UNIXTIME(".($args{date} + 4*86400).") ORDER BY ABS(".($args{date})." - UNIX_TIMESTAMP(Stamp)) LIMIT 10");
     $sth->execute();
-
-    my $fxrate = 1;
-    if ($args{convert_currency} && $args{convert_currency} ne $args{currency}) {
-        chomp($fxrate = `$Bin/lookup-historical-fxrate '$args{convert_currency}' '$args{date}'`);
-        die "Can't find conversion rate from $args{currency} -> $args{convert_currency}\n" unless $fxrate;
-        $fxrate = 1/$fxrate;
-    }
 
     if ($args{raw}) {
         my @rows;
         while (my $row = $sth->fetchrow_hashref) {
-            $row->{Price} *= $fxrate;
             push @rows, $row;
         }
         [200, "OK", \@rows];
     } else {
         my $row = $sth->fetchrow_hashref;
-        [200, "OK", $row->{Price}*$fxrate, {'func.date' => $row->{Stamp}}];
+        [200, "OK", $row->{Price}, {'func.date' => $row->{Stamp}}];
     }
 }
 

@@ -1,0 +1,13 @@
+#!/usr/bin/env perl
+
+use 5.010001;
+use strict;
+use warnings;
+
+@ARGV or die "Usage: $0 <Index>\n";
+my $index = shift @ARGV;
+$index =~ /\A\d+\z/ or die "Invalid Index, please supply a number\n";
+
+system "mysql-query",
+    "--database", "mtgox",
+    "--query", "SELECT _rowid, stamp, type, bitcoins btc, bitcoins_change btc_chg, ROUND(balance_bitcoins,8) bal_btc, ROUND(money_jpy,3) money_jpy, ROUND(money_jpy/bitcoins,3) price, ROUND(balance_bitcoins_book_value,3) bal_btc_bv, ROUND(balance_bitcoins_market_value,3) bal_btc_mv, ROUND(avg_purchase_price,3) avg_pprice, ROUND(tx_realized_gain,3) tx_rgain, ROUND(total_realized_gain,3) tot_rgain, ROUND(balance_bitcoins_market_value + total_realized_gain,3) tot_value FROM _Trade2 WHERE `Index`=$index", @ARGV;

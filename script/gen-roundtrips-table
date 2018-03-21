@@ -1,0 +1,111 @@
+#!/usr/bin/env perl
+
+# Before running this script, you have to already run the import-* scripts and
+# extra.sql. Also install the required CPAN modules.
+
+use 5.010001;
+use strict;
+use warnings;
+use FindBin '$Bin';
+use Log::ger;
+#use Log::ger::DBI::Query;
+
+use DBIx::Connect::MySQL;
+use IPC::System::Options 'readpipe', -log=>1;
+use Perinci::CmdLine::Any;
+use Progress::Any '$progress';
+use Progress::Any::Output 'TermProgressBarColor', fh=>\*STDERR;
+
+our %SPEC;
+
+$SPEC{app} = {
+    v => 1.1,
+    args => {
+    },
+};
+sub app {
+    my %args = @_;
+
+    my $dbh = DBIx::Connect::MySQL->connect(
+        "dbi:mysql:database=mtgox", undef, undef, {RaiseError=>1});
+    $dbh->do("SET time_zone = '+00:00'");
+
+    log_trace "Creating table ...";
+    $dbh->do("
+CREATE TABLE IF NOT EXISTS _Round_Trip (
+  _rowid INT NOT NULL PRIMARY KEY AUTO_INCREMENT,
+  `Index` INT NOT NULL, -- trader
+  Begin_Stamp DATETIME NOT NULL,
+  End_Stamp DATETIME NOT NULL,
+  Num_Tx INT NOT NULL,
+  Realized_Gain DOUBLE NOT NULL
+) ENGINE='MyISAM';
+");
+
+    my $sth_create = $dbh->prepare("INSERT INTO _Round_Trip (`Index`,Begin_Stamp,End_Stamp,Num_Tx,Realized_Gain) VALUES (?,?,?,?,?)");
+
+    log_trace "Selecting users ...";
+    my %Users;
+    my $sth = $dbh->prepare("SELECT `Index` FROM _Trade2_By_Index");
+    $sth->execute;
+    while (my @row = $sth->fetchrow_array) { $Users{$row[0]}++ }
+
+    $progress->target(scalar keys %Users);
+
+    my $i = 0;
+    for my $idx (sort keys %Users) {
+        $i++;
+        $progress->update(message => "Processing User #$idx", pos=>$i);
+        my $sth = $dbh->prepare(<<_);
+SELECT
+  Type,
+  Stamp,
+  -- UNIX_TIMESTAMP(Stamp) Stamp_Unix,
+  Balance_Bitcoins,
+  Tx_Realized_Gain
+FROM _Trade2 t
+WHERE
+  `Index`=$idx
+ORDER BY _rowid
+_
+        $sth->execute;
+        my $prev_bal;
+        my $begin_stamp;
+        my $realized_gain = 0;
+        my $num_tx;
+        while (my $row = $sth->fetchrow_hashref) {
+            $num_tx++;
+            if ($row->{Type} eq 'buy') {
+                if ((!defined($prev_bal) || $prev_bal == 0)) {
+                    # start of a new round-trip, user starts from zero balance and opens a position
+                    $begin_stamp = $row->{Stamp};
+                    $realized_gain = 0;
+                    $num_tx = 1;
+                }
+            } else {
+                $realized_gain += $row->{Tx_Realized_Gain} // 0 if $begin_stamp;
+                if ($prev_bal && $row->{Balance_Bitcoins} == 0) {
+                    # end of a round-trip, user sells all and makes balance zero
+                    log_trace "ROUND-TRIP: User#$idx FROM $begin_stamp TO $row->{Stamp}: ".($realized_gain > 0 ? "GAIN" : $realized_gain < 0 ? "LOSS" : "NEUTRAL");
+                    $sth_create->execute(
+                        $idx,
+                        $begin_stamp,
+                        $row->{Stamp},
+                        $num_tx,
+                        $realized_gain,
+                    );
+                }
+            }
+            $prev_bal = $row->{Balance_Bitcoins};
+        }
+    }
+    $progress->finish;
+
+    [200, "OK"];
+}
+
+Perinci::CmdLine::Any->new(
+    url => '/main/app',
+    log => 1,
+    log_level => 'trace',
+)->run;

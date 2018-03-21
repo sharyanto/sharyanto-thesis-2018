@@ -248,8 +248,8 @@ regular two-letter country codes as well as '' (empty), '!!', '??', 'A1', 'A2').
 * The trade data (_Trade2 table)
 
 The ~_Trade2~ table contains the same trade data as Trade table, except for
-trades from some user Indexes: deleted user, THK, and known bots (according to
-The Willy report, trades with User_Country='??' and User_State='??' are
+trades from some user Indexes: deleted user, THK, and known bots (e.g. according
+to The Willy report, trades with User_Country='??' and User_State='??' are
 suspected to be performed by Mt Gox's own bots). Basically, ~_Trade2~ is an
 attempt to contain only trades by individual traders.
 

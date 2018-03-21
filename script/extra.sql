@@ -16,16 +16,20 @@ CREATE INDEX Trade_User__       ON Trade(User__);
 -- this is a list of user Index we want to ignore in this study, because they
 -- are special users
 
-CREATE TABLE _Index_Exclude (
+CREATE TABLE _Trade_Index_Exclude (
     `Index` INT NOT NULL PRIMARY KEY,
     Note VARCHAR(255)
 ) ENGINE='MyISAM';
 
-INSERT INTO _Index_Exclude VALUES (-1, 'deleted');
-INSERT INTO _Index_Exclude VALUES (-2, 'THK');
+INSERT INTO _Trade_Index_Exclude VALUES (-1, 'deleted');
+INSERT INTO _Trade_Index_Exclude VALUES (-2, 'THK');
 -- in the Willy Report, it is pointed out that trades with User_Country='??' and
 -- User_State='??' are those initiated by bots
-INSERT INTO _Index_Exclude (`Index`,Note) SELECT DISTINCT `Index`, 'bot'  FROM Trade WHERE User_Country='??' AND User_State='??';
+INSERT INTO _Trade_Index_Exclude (`Index`,Note) SELECT DISTINCT `Index`, 'bot'  FROM Trade WHERE User_Country='??' AND User_State='??';
+-- also these IDs
+INSERT INTO _Trade_Index_Exclude (`Index`,Note) VALUES (634, 'bot');
+INSERT INTO _Trade_Index_Exclude (`Index`,Note) VALUES (179200, 'bot');
+INSERT INTO _Trade_Index_Exclude (`Index`,Note) VALUES (698630, 'bot'); -- "Markus"
 
 -- this is trades which have excluded bots and special transactions. the columns
 -- are the same as Trade, but with some extra columns that contain statistics
@@ -59,31 +63,43 @@ CREATE TABLE _Trade2 (
     -- Gox in the period of 2011-04 to 2013-11, and the fiat money produced from
     -- selling those bitcoins.
 
-    Balance_Bitcoins DOUBLE NOT NULL,     -- current inventory of bitcoins after this transaction.
+        -- amount of bitcoins sold/bought. when type=buy, this is Bitcoins -
+        -- Bitcoin_Fee. when type=sell, this is negative: -MIN(Bitcoins,
+        -- amount-which-cause-balance-to-be-zero). when there is an overselling,
+        -- only be the amount up to available balance (in negative sign) will be
+        -- used, to avoid negative balance.
+    Bitcoins_Change DOUBLE NOT NULL,
 
-    -- note that when there is overselling, we assume the excess to be amount of
-    -- bitcoins purchased before 2011-04 or deposited from other exchanges and
-    -- ignored that amount. balance will be set to 0 instead of negative. this
-    -- also means this balance_bitcoins does not include amount from before
-    -- 2011-04 or transferred from other exchanges, because we don't have data
-    -- for those.
+        -- current inventory (running balance) of bitcoins after this
+        -- transaction, which is Balance_Bitcoins at user's previous transaction
+        -- + Bitcoins_Change
+    Balance_Bitcoins DOUBLE NOT NULL,
 
-    Balance_Bitcoins_Book_Value   DOUBLE, -- worth of running balance of bitcoins, in JPY, in terms of bitcoin purchase price. NULL if negative balance.
-    Balance_Bitcoins_Market_Value DOUBLE, -- worth of running balance of bitcoins, in JPY, in terms of current bitcoin price. NULL if negative balance.
-    Avg_Purchase_Price DOUBLE,            -- NULL if zero or negative balance.
-    Paper_Gain DOUBLE,                    -- calculated as Balance_Bitcoins_Market_Value - Balance_Bitcoins_Book_Value. NULL if negative balance.
-
-    Balance_Jpy DOUBLE NOT NULL,          -- running balance of fiat after this transaction (in JPY, since Mt Gox already keeps fiat amount in JPY).
-
-    Bitcoins_Sold DOUBLE NOT NULL,        -- (only when type=sell) bitcoins sold, which is the same as Bitcoins unless when overselling where this will be only be the amount of balance available previous to this transaction.
-    Tx_Realized_Gain DOUBLE,              -- (only when type=sell) gain realized in this transaction (in JPY), = Bitcoins * (Average_Purchase_Price). can be negative or NULL when type!=sell or Avg_Purchase_Price is NULL.
-    Total_Realized_Gain DOUBLE            -- running total of Tx_Realized_Gain
-
+        -- worth of running balance of bitcoins, in JPY, in terms of bitcoin
+        -- purchase price. NULL if zero balance.
+    Balance_Bitcoins_Book_Value   DOUBLE NOT NULL,
+        -- worth of running balance of bitcoins, in JPY, in terms of current
+        -- bitcoin price. NULL if zero balance.
+    Balance_Bitcoins_Market_Value DOUBLE NOT NULL,
+        -- NULL if zero balance.
+    Avg_Purchase_Price DOUBLE,
+        -- calculated as Balance_Bitcoins_Market_Value -
+        -- Balance_Bitcoins_Book_Value. NULL if negative balance.
+    Paper_Gain DOUBLE,
+        -- running balance of fiat after this transaction (in JPY, since Mt Gox
+        -- already keeps fiat amount in JPY).
+    Balance_Jpy DOUBLE NOT NULL,
+        -- (only when type=sell) gain realized in this transaction (in JPY), =
+        -- Bitcoins * (Average_Purchase_Price). can be negative or NULL when
+        -- type!=sell or Avg_Purchase_Price is NULL.
+    Tx_Realized_Gain DOUBLE,
+        -- running total of Tx_Realized_Gain
+    Total_Realized_Gain DOUBLE,
 ) ENGINE='MyISAM';
 
 INSERT INTO _Trade2
   SELECT *, 0, NULL, NULL, NULL, NULL, 0, NULL, NULL
-  FROM Trade WHERE `Index` NOT IN (SELECT `Index` FROM _Index_Exclude);
+  FROM Trade WHERE `Index` NOT IN (SELECT `Index` FROM _Trade_Index_Exclude);
 
 CREATE INDEX _Trade2_Stamp        ON _Trade2(Stamp);
 CREATE INDEX _Trade2_Index        ON _Trade2(`Index`);
@@ -175,11 +191,11 @@ INSERT INTO _Trade2_By_Currency
 
 ---
 
-CREATE TABLE _Index_With_Duplicate_Users_In_Trade (
+CREATE TABLE _Trade_Index_With_Duplicate_Users_In_Trade (
   `Index` INT NOT NULL,
   User__ CHAR(36) NOT NULL
 );
-INSERT INTO _Index_With_Duplicate_Users_In_Trade
+INSERT INTO _Trade_Index_With_Duplicate_Users_In_Trade
   SELECT DISTINCT `Index`, User__ FROM Trade WHERE User__<>'' AND `Index` IN (
     SELECT `Index` from Trade WHERE User__<>'' GROUP BY `Index` HAVING COUNT(DISTINCT User__) > 1
   );
@@ -194,3 +210,92 @@ CREATE TABLE _Period (
 INSERT INTO _Period VALUES ('bull1', '2011-04-01 00:28:54', '2011-06-08 23:59:59');
 INSERT INTO _Period VALUES ('bear1', '2011-06-09 00:00:00', '2011-11-19 23:59:59');
 INSERT INTO _Period VALUES ('bull2', '2011-11-20 00:00:00', '2013-11-30 23:59:55');
+
+---
+
+-- note: this only shows trading volume vs time, not returns
+
+CREATE TABLE _Trade2_By_Hour_Of_Day (
+  `Hour` INT NOT NULL,
+  Num_Trades INT NOT NULL,
+  Trade_Volume_Bitcoins DOUBLE NOT NULL,
+  Trade_Volume_Jpy DOUBLE NOT NULL
+);
+INSERT INTO _Trade2_By_Hour_Of_Day
+  SELECT
+    HOUR(Stamp) `Hour`,
+    COUNT(*) Num_Trades,
+    SUM(Bitcoins) Trade_Volume_Bitcoins,
+    SUM(Money_Jpy) Trade_Volume_Jpy
+  FROM _Trade2
+  GROUP BY HOUR(Stamp);
+
+---
+
+CREATE TABLE _Trade2_By_Day_Of_Week (
+  `Dow` INT NOT NULL, -- 1 = sunday, 7 = saturday
+  Num_Trades INT NOT NULL,
+  Trade_Volume_Bitcoins DOUBLE NOT NULL,
+  Trade_Volume_Jpy DOUBLE NOT NULL
+);
+INSERT INTO _Trade2_By_Day_Of_Week
+  SELECT
+    DAYOFWEEK(Stamp) `Dow`,
+    COUNT(*) Num_Trades,
+    SUM(Bitcoins) Trade_Volume_Bitcoins,
+    SUM(Money_Jpy) Trade_Volume_Jpy
+  FROM _Trade2
+  GROUP BY DAYOFWEEK(Stamp);
+
+---
+
+CREATE TABLE _Trade2_By_Day_Of_Month (
+  `Day` INT NOT NULL,
+  Num_Trades INT NOT NULL,
+  Trade_Volume_Bitcoins DOUBLE NOT NULL,
+  Trade_Volume_Jpy DOUBLE NOT NULL
+);
+INSERT INTO _Trade2_By_Day_Of_Month
+  SELECT
+    DAY(Stamp) `Day`,
+    COUNT(*) Num_Trades,
+    SUM(Bitcoins) Trade_Volume_Bitcoins,
+    SUM(Money_Jpy) Trade_Volume_Jpy
+  FROM _Trade2
+  GROUP BY DAY(Stamp);
+
+---
+
+CREATE TABLE _Trade2_By_Country (
+  User_Country CHAR(2),
+  Num_Trades INT NOT NULL,
+  Num_Traders INT NOT NULL,
+  Trade_Volume_Bitcoins DOUBLE NOT NULL,
+  Trade_Volume_Jpy DOUBLE NOT NULL
+);
+INSERT INTO _Trade2_By_Country
+  SELECT
+    User_Country,
+    COUNT(*) Num_Trades,
+    COUNT(Distinct `Index`) Num_Traders,
+    SUM(Bitcoins) Trade_Volume_Bitcoins,
+    SUM(Money_Jpy) Trade_Volume_Jpy
+  FROM _Trade2
+  GROUP BY User_Country;
+
+---
+
+-- this lists traders who are only identified by a single User_Country value
+
+CREATE TABLE _Trade2_Index_Country (
+  `Index` INT NOT NULL PRIMARY KEY,
+  User_Country CHAR(2) NOT NULL
+);
+INSERT INTO _Trade2_Index_Country
+  SELECT
+    `Index`,
+    GROUP_CONCAT(DISTINCT User_Country)
+  FROM _Trade2
+  WHERE User_Country IS NOT NULL AND User_Country <> '' AND User_Country <> '!!'
+  GROUP BY `Index`
+  HAVING COUNT(DISTINCT User_Country) = 1;

@@ -2,8 +2,7 @@
 
 # Before running this script, please do the following:
 #
-# 1. Install these modules from CPAN: DBIx::Connect::MySQL, Progress::Any,
-#    Progres::Any::Output::TermProgressBarColor.
+# 1. Install the required modules from CPAN.
 #
 # 2. Create a MySQL database called `mtgox` and create a ~/.my.cnf configuration
 #    file that contains access information to the database, e.g.:
@@ -11,119 +10,50 @@
 #    [client]
 #    user=root
 #    password=your_db_password
+#
+# 3. Run gen-fxrates-csv script.
 
 use 5.010001;
 use strict;
 use warnings;
+use FindBin '$Bin';
 
 use DBIx::Connect::MySQL;
-use Progress::Any '$progress';
-use Progress::Any::Output 'TermProgressBarColor';
+use POSIX qw(strftime);
 
 my $dbh = DBIx::Connect::MySQL->connect(
-    "dbi:mysql:database=mtgox3", undef, undef, {RaiseError=>1});
+    "dbi:mysql:database=mtgox", undef, undef, {RaiseError=>1});
 
 $dbh->do("
 CREATE TABLE IF NOT EXISTS Fxrate (
-    _rowid INT NOT NULL PRIMARY KEY AUTO_INCREMENT,
-    Stamp DATEIME NOT NULL,
-    Currency1 CHAR(3) NOT NULL,
-    Currency2 CHAR(3) NOT NULL,
-    INDEX(Stamp, Currency1, Currency2),
-    Price DOUBLE NOT NULL -- 1 Currency1 = this much of Currency2
-) ENGINE='MyISAM'
+  _rowid INT NOT NULL PRIMARY KEY AUTO_INCREMENT,
+  Stamp DATETIME NOT NULL, -- in UTC
+  Currency1 CHAR(3) NOT NULL,
+  Currency2 CHAR(3) NOT NULL,
+  UNIQUE (Stamp, Currency1, Currency2),
+  Price DOUBLE NOT NULL
+) ENGINE='MyISAM';
 ");
 
-my @csv_files = sort(glob("*.csv"), glob("2013-04/*.csv"));
-@csv_files == 62 or die "There needs to be 60 .csv files in the current ".
-    "directory, plus 2 .csv files under the 2013-04/ subdirectory ".
-    "(you have ".(scalar @csv_files)."). Please ".
-    "extract these first from MtGox2014Leak.zip\n";
+my @files = glob("$Bin/../data/fxrates/*-USD.csv");
+@files or die "Please run gen-fxrates-csv script first\n";
 
 my $sth = $dbh->prepare("
-INSERT INTO Trade (
-    Id,Stamp,`Index`,User__,User_Id_Hash,
-    Japan,Type,Currency__,Bitcoins,Money,
-    Money_Rate,Money_Jpy,Money_Fee,Money_Fee_Rate,Money_Fee_Jpy,
-    Bitcoin_Fee,Bitcoin_Fee_Jpy,User_Country,User_State
-) VALUES (
-    ?,?,?,?,?,
-    ?,?,?,?,?,
-    ?,?,?,?,?,
-    ?,?,?,?
-)
+INSERT INTO Fxrate (Stamp, Currency1, Currency2, Price) VALUES (?,?,?,?)
 ");
 
-my %seen; # key: "Id|Stamp|Index|Type|Money (rounded to 3 decimal digits)"
-my $last_period;
+for my $file (@files) {
+    warn "Processing '$file' ...\n";
+    my ($currency1) = $file =~ /([A-Z][A-Z][A-Z])-USD/;
+    open my $fh, "<", $file or die;
 
-$progress->target(~~@csv_files);
-for my $csv_file (@csv_files) {
-    open my $fh, "nauniq --num-entries 1000 $csv_file | "
-        or die "Can't open $csv_file: $!";
-    $progress->update(message => "Processing file '$csv_file'");
-
-    my ($period) = $csv_file =~ /(\d{4}-\d{2})/;
-    # we only check duplicates for csv files from the same month
-    if ($last_period && $period ne $last_period) {
-        %seen = ();
-    }
-
-    my $row = 0;
-    my $format;
+    my $i = 0;
     while (<$fh>) {
-        # the second format has 2 additional columns
-        unless ($row++) {
-            if (/User_Id_Hash/) { $format = 2 } else { $format = 1 }
-            next;
-        }
-
-        s/\R//;
-
-        my @f = split /,/,$_;
-        if ($format == 1) { splice @f, 3, 0, "", "" }
-
-        if (@f < 15) {
-            warn "Corrupt record #".($.-1)." <17 columns ".(scalar @f)."), skipped: $_";
-            next;
-        }
-
-        $f[15] = 0 if !defined($f[15]) || $f[15] eq ""; # some other user has Bitcoin_Fee=''
-        $f[16] = 0 if !defined($f[16]) || $f[16] eq ""; # THK has Bitcoin_Fee_Jpy=''
-
-        $f[17] //= undef;
-        $f[18] //= undef;
-
-        if (@f > 19) {
-            warn "Corrupt record #".($.-1)." >19 columns (".(scalar @f)."), skipped: $_";
-            next;
-        }
-
-        # remove quotes from the Stamp
-        $f[1] =~ s/"//g;
-
-        # set DELETED index to -1, THX to -2
-        $f[2] = -1 if $f[2] eq "DELETED";
-        $f[2] = -2 if $f[2] eq "TIBANNE_LIMITED_HK" || $f[2] eq "THK";
-
-        # check type
-        if ($f[6] ne "buy" and $f[6] ne "sell") {
-            warn "Corrupt record #".($.-1)." type!=buy|sell ($f[6]), skipped: $_";
-            next;
-        }
-
-        my $key = sprintf(
-            "%s|%s|%s|%s|%.3f",
-            $f[0], $f[1], $f[2], $f[6], $f[9],
-        );
-        if ($seen{$key}++) {
-            warn "Duplicate record #".($.-1).", skipped: $_";
-            next;
-        }
-
-        $sth->execute(@f);
+        chomp;
+        my @F = split/,/,$_;
+        for (@F) { s/^"//; s/"$// }
+        $F[0] = strftime "%Y-%m-%d %H:%M:%S", gmtime $F[0];
+        $sth->execute($F[0], $currency1, 'USD', $F[1]);
+        $sth->execute($F[0], 'USD', $currency1, 1/$F[1]);
     }
-
-    $last_period = $period;
 }
-$progress->finish;

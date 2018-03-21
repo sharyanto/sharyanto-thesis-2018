@@ -1,0 +1,183 @@
+#!/usr/bin/env perl
+
+# Before running this script, you have to already run the import-* scripts and
+# extra.sql. Also install the required CPAN modules.
+
+use 5.010001;
+use strict;
+use warnings;
+use FindBin '$Bin';
+use Log::ger;
+#use Log::ger::DBI::Query;
+
+use DBIx::Connect::MySQL;
+use IPC::System::Options 'readpipe', -log=>1;
+use Perinci::CmdLine::Any;
+use Progress::Any '$progress';
+use Progress::Any::Output 'TermProgressBarColor';
+
+our %SPEC;
+
+$SPEC{app} = {
+    v => 1.1,
+    args => {
+        t1 => {schema=>['date*', 'x.perl.coerce_to'=>'DateTime'], req=>1, pos=>0},
+        t2 => {schema=>['date*', 'x.perl.coerce_to'=>'DateTime'], req=>1, pos=>1},
+        include_users => {
+            summary => 'Only include specified user ID(s)',
+            'x.name.is_plural' => 1,
+            'x.name.singular' => 'include_user',
+            schema => ['array*', of=>'posint*'],
+            tags => ['category:testing'],
+        },
+    },
+};
+sub app {
+    my %args = @_;
+
+    my $dbh = DBIx::Connect::MySQL->connect(
+    "dbi:mysql:database=mtgox", undef, undef, {RaiseError=>1});
+    $dbh->do("SET time_zone = '+00:00'");
+
+    my ($t1, $t2) = ($args{t1}, $args{t2});
+
+    my $t1_mysql = $t1->strftime("%Y-%m-%d %H:%M:%S");
+    my $t2_mysql = $t2->strftime("%Y-%m-%d %H:%M:%S");
+
+    # step 1. get price of bitcoin at t2.
+    my $price_t2;
+    {
+        (my $t2_iso = "${t2_mysql}Z") =~ s/ /T/;
+        $price_t2 = `$Bin/lookup-historical-bitcoin-price '$t2_iso' --convert JPY`;
+    }
+    log_trace "1. Got price of bitcoin at t2 = %.8f", $price_t2;
+
+    log_trace "2. Filtering users that has a transaction <= t1";
+    my %Users; # key = Index, value = rowid of user's last transaction <= t1
+    {
+        my $sth = $dbh->prepare(<<_);
+SELECT
+  *, (SELECT User_Country FROM _Trade2_Index_Country WHERE `Index`=_Trade2.Index LIMIT 1) User_Country
+FROM _Trade2
+JOIN (
+  SELECT
+    `Index`,
+    MAX(_rowid) _rowid
+  FROM _Trade2
+  WHERE
+    Stamp <= '$t1_mysql'
+    AND `Index` IN (
+      SELECT `Index` FROM _Trade2_By_Index WHERE First_Trade_Stamp <= '$t1_mysql'
+    )
+  GROUP BY `Index`
+) t
+ON _Trade2._rowid=t._rowid
+WHERE Balance_Bitcoins > 0
+_
+        $sth->execute;
+        while (my $row = $sth->fetchrow_hashref) {
+            if ($args{include_users}) {
+                next unless grep {$_ eq $row->{Index}} @{ $args{include_users} };
+            }
+            $Users{$row->{Index}} = $row;
+        }
+    }
+    log_trace "Number of users (1): %d", scalar(keys %Users);
+
+    log_trace "User Indexes: %s", [sort {$a<=>$b} keys %Users];
+
+    my %Data; # key = {Index}{dataname}
+    log_trace "3. Listing users' transactions between t1 & t2 ...";
+    my $num_users = keys %Users;
+    $progress->target($num_users);
+    my $i = 0;
+    for my $idx (sort keys %Users) {
+        $i++;
+        $progress->update(message => "Processing User Index #$idx", pos=>$i);
+        my $sth = $dbh->prepare(<<_);
+SELECT
+  *, UNIX_TIMESTAMP(Stamp) Stamp_Unix
+FROM _Trade2 t
+WHERE
+  `Index`=$idx
+  AND (_rowid=$Users{$idx}{_rowid} OR Stamp BETWEEN '$t1_mysql' AND '$t2_mysql')
+ORDER BY _rowid
+_
+        $sth->execute;
+        my $num_tx = 0;
+        my $tot_rgain = 0;
+        my $row;
+        my $total_buy = 0;
+        my $orig_book_value; # before the 1st transaction
+        my $total_trade_jpy = 0;
+        my $total_trade_bitcoins = 0;
+        while (my $row0 = $sth->fetchrow_hashref) {
+            $row = $row0;
+            #log_trace "TX:%s", $row;
+            next unless $row->{Bitcoins} > 0; # a couple of rows has zero bitcoins
+            $num_tx++;
+            my $price = $row->{Money_Jpy} / $row->{Bitcoins};
+            if ($num_tx == 1) {
+                $orig_book_value = ($row->{Balance_Bitcoins} - $row->{Bitcoins_Change}) * $price;
+            }
+            if ($row->{Type} eq 'buy') {
+                $total_buy += $row->{Bitcoins_Change} * $price;
+                $total_trade_bitcoins += $row->{Bitcoins_Change};
+                $total_trade_jpy      += $row->{Bitcoins_Change} * $price;
+            } else {
+                $tot_rgain += ($row->{Tx_Realized_Gain} // 0);
+                $total_trade_bitcoins += -$row->{Bitcoins_Change};
+                $total_trade_jpy      += -$row->{Bitcoins_Change} * $price;
+            }
+        }
+        if ($row->{Stamp_Unix} < $t2->epoch - 7*86400 && $row->{Balance_Bitcoins}) {
+            log_warn "User #$idx has sold off at least 7 days before t2, skipped";
+            next;
+        }
+        my $p1 = $orig_book_value + $total_buy;
+        if ($p1 == 0) {
+            log_warn "p1 = 0 for User #$idx, skipping user";
+            next;
+        }
+        my $p2 = $row->{Balance_Bitcoins} * $price_t2 + $tot_rgain; # final market value
+        my $return = ($p2 - $p1) / $p1;
+        #log_trace "User %6d: numtx=%d | start: btc=%.8f (book value %.3f) | end: btc=%.8f (price=%.3f, market value=%.3f) | tot_rgain=%.3f | return=%.3f",
+        #    $idx, $num_tx,
+        #    $Users{$idx}{Balance_Bitcoins}, $orig_book_value,
+        #    $row->{Balance_Bitcoins}, $price_t2, $final_market_value,
+        #    $tot_rgain,
+        #    $return;
+        $Data{$idx} = {
+            freq => $num_tx,
+            return => $return,
+            tot_trade_btc => $total_trade_bitcoins,
+            tot_trade_jpy => $total_trade_jpy,
+            avg_trade_jpy => $total_trade_jpy / $num_tx,
+            avg_trade_btc => $total_trade_bitcoins / $num_tx,
+        };
+    }
+    $progress->finish;
+
+    my @res;
+    for my $idx (sort {$a<=>$b} keys %Data) {
+        push @res, {
+            index         => $idx,
+            country       => $Users{$idx}{User_Country},
+            freq          => $Data{$idx}{freq},
+            log_freq      => log($Data{$idx}{freq})/log(10),
+            return        => $Data{$idx}{return},
+            tot_trade_btc => $Data{$idx}{tot_trade_btc},
+            tot_trade_jpy => $Data{$idx}{tot_trade_jpy},
+            avg_trade_jpy => $Data{$idx}{avg_trade_jpy},
+            avg_trade_btc => $Data{$idx}{avg_trade_btc},
+        };
+    }
+
+    [200, "OK", \@res];
+}
+
+Perinci::CmdLine::Any->new(
+    url => '/main/app',
+    log => 1,
+    log_level => 'trace',
+)->run;
