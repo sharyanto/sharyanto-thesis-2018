@@ -81,11 +81,8 @@ wallets of 128,166 unique users (User__) and 3663 unique Index'es.
 
 ** Completeness
 
-The balances data does not contain balance for 14,486 unique User__ values that
-are involved in trading. On the other hand, there are 44,707 distinct User__
-values that are never seen in the trade data. This means that for a significant
-number of User__'s involved in trade (a total of 97,944 unique User__ value),
-there are no balance data.
+The balances data contains balance for at least a wallet of 74,677 User__'s
+involved in trading. It does not contain balance for the rest (12,270 User__'s).
 
 * The trade data (Trade table)
 
@@ -244,6 +241,31 @@ Note: Importing the trade data takes about 58 minutes on my Asus Zenbook UX305
 After importing, the table contains 16,169,411 rows. There are 86,937 unique
 User__ values, 127,233 unique Index values, 167 unique User_Country values (with
 regular two-letter country codes as well as '' (empty), '!!', '??', 'A1', 'A2').
+
+* The wallet withdraw/deposit data (Transfer table)
+
+Source file: btc_xfer_report.csv
+
+This file records deposits into or withdrawals from a user wallet.
+
+** Columns
+
+`Wallet`, links to `User_Wallet__` column in the User_Wallet table.
+
+`Entry`, transaction ID. Although there are 622 entries that are duplicate.
+
+`Operation`, either deposit or withdraw.
+
+`Date`.
+
+** Summary statistics
+
+- Total number of rows: 3,283,331
+- Unique wallets: 147,078
+
+** Completeness
+
+- Wallets that have corresponding value in User_Wallet table: 79,645.
 
 * The trade data (_Trade2 table)
 

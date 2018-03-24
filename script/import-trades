@@ -26,7 +26,7 @@ use Progress::Any '$progress';
 use Progress::Any::Output 'TermProgressBarColor';
 
 my $dbh = DBIx::Connect::MySQL->connect(
-    "dbi:mysql:database=mtgox3", undef, undef, {RaiseError=>1});
+    "dbi:mysql:database=mtgox", undef, undef, {RaiseError=>1});
 
 $dbh->do("
 CREATE TABLE IF NOT EXISTS Trade (

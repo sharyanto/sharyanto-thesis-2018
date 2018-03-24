@@ -299,3 +299,19 @@ INSERT INTO _Trade2_Index_Country
   WHERE User_Country IS NOT NULL AND User_Country <> '' AND User_Country <> '!!'
   GROUP BY `Index`
   HAVING COUNT(DISTINCT User_Country) = 1;
+
+---
+
+CREATE INDEX Transfer_Wallet ON Transfer(Wallet);
+CREATE INDEX Transfer_Entry ON Transfer(Entry); -- there are duplicate values
+CREATE INDEX Transfer_Date ON Transfer(Date);
+
+--- list of User Indexes in Trade that are associated with only a single User__ value
+
+CREATE TABLE _Trade_Index_With_Single_User (
+  `Index` INT NOT NULL,
+  `User__` CHAR(36) NOT NULL
+);
+INSERT INTO _Trade_Index_Always_With_User
+  SELECT `Index`, GROUP_CONCAT(DISTINCT `User__`) FROM Trade
+  WHERE User__ IS NOT NULL AND User__<>'' GROUP BY `Index` HAVING COUNT(DISTINCT User__)=1;

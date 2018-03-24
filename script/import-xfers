@@ -1,0 +1,62 @@
+#!/usr/bin/env perl
+
+# Before running this script, please do the following:
+#
+# 1. Install required CPAN modules.
+#
+# 2. Setup database (see instruction in import-balances or import-trades
+# script).
+#
+# 3. Extract 'btc_xfer_report.csv' file. Run this script in the same directory
+# as the file.
+
+use 5.010001;
+use strict;
+use warnings;
+
+use DBIx::Connect::MySQL;
+use Progress::Any '$progress';
+use Progress::Any::Output 'TermProgressBarColor';
+
+my $dbh = DBIx::Connect::MySQL->connect(
+    "dbi:mysql:database=mtgox", undef, undef, {RaiseError=>1});
+
+$dbh->do("
+CREATE TABLE IF NOT EXISTS Transfer (
+    _rowid INT NOT NULL PRIMARY KEY AUTO_INCREMENT,
+    Wallet CHAR(36) NOT NULL,
+    Entry CHAR(36) NOT NULL,
+    Date DATETIME NOT NULL,
+    Operation VARCHAR(8) NOT NULL,
+    Amount DOUBLE NOT NULL
+) ENGINE='MyISAM'
+");
+
+(-f "btc_xfer_report.csv")
+    or die "Please run this script in the directory that contains  ".
+    "btc_xfer_report.csv\n";
+
+my $sth = $dbh->prepare("
+INSERT INTO Transfer (
+    Wallet,Entry,Date,Operation,Amount
+) VALUES (
+    ?,?,?,?,?
+)
+");
+
+open my $fh, "<", "btc_xfer_report.csv"
+    or die "Can't open btc_xfer_report.csv: $!";
+
+my $row = 0;
+my $format;
+while (<$fh>) {
+    next unless $row++;
+    $progress->update(message => "Processing row #$row ...") if $row % 100 == 0;
+
+    s/\R//;
+    my @f = split /,/,$_;
+    for ($f[2]) {  s/^"//; s/"$// }
+
+    $sth->execute(@f);
+}
+$progress->finish;

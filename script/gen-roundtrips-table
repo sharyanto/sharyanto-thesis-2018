@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS _Round_Trip (
     $progress->target(scalar keys %Users);
 
     my $i = 0;
-    for my $idx (sort keys %Users) {
+    for my $idx (sort {$a<=>$b} keys %Users) {
         $i++;
         $progress->update(message => "Processing User #$idx", pos=>$i);
         my $sth = $dbh->prepare(<<_);
