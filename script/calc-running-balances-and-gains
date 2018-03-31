@@ -37,7 +37,7 @@ sub app {
     $dbh->do("SET time_zone = '+00:00'");
 
     # this is just too big, we need to split it per Index value
-    #my $sth = $dbh->prepare("SELECT *, UNIX_TIMESTAMP(Stamp) AS Unix_Time FROM _Trade2 ORDER BY Stamp");
+    #my $sth = $dbh->prepare("SELECT *, UNIX_TIMESTAMP(Stamp) AS Unix_Time FROM _Trade2 ORDER BY Stamp,_rowid");
 
     my @Indexes;
     if ($args{include_users}) {
@@ -63,7 +63,7 @@ sub app {
     for my $idx (@Indexes) {
         $i++;
         $progress->update(message => "Processing user ID #$idx", pos=>$i);
-        my $sth = $dbh->prepare("SELECT *, UNIX_TIMESTAMP(Stamp) AS Unix_Time FROM _Trade2 WHERE `Index`=? ORDER BY _rowid");
+        my $sth = $dbh->prepare("SELECT *, UNIX_TIMESTAMP(Stamp) AS Unix_Time FROM _Trade2 WHERE `Index`=? ORDER BY Stamp,_rowid");
         $sth->execute($idx);
 
         my @rows;

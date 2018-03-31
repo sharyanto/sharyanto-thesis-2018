@@ -12,6 +12,7 @@ use Log::ger;
 
 use DBIx::Connect::MySQL;
 use IPC::System::Options 'readpipe', -log=>1;
+use List::Util qw(sum);
 use Perinci::CmdLine::Any;
 use Progress::Any '$progress';
 use Progress::Any::Output 'TermProgressBarColor', fh=>\*STDERR;
@@ -21,6 +22,13 @@ our %SPEC;
 $SPEC{app} = {
     v => 1.1,
     args => {
+        include_users => {
+            summary => 'Only include specified user ID(s)',
+            'x.name.is_plural' => 1,
+            'x.name.singular' => 'include_user',
+            schema => ['array*', of=>'posint*'],
+            tags => ['category:testing'],
+        },
     },
 };
 sub app {
@@ -35,20 +43,37 @@ sub app {
 CREATE TABLE IF NOT EXISTS _Round_Trip (
   _rowid INT NOT NULL PRIMARY KEY AUTO_INCREMENT,
   `Index` INT NOT NULL, -- trader
-  Begin_Stamp DATETIME NOT NULL,
-  End_Stamp DATETIME NOT NULL,
+  First_Tx_Stamp DATETIME NOT NULL,
+  Last_Tx_Stamp DATETIME NOT NULL,
+  Weighted_Avg_Begin_Stamp DATETIME NOT NULL,
+  Weighted_Avg_End_Stamp DATETIME NOT NULL,
   Num_Tx INT NOT NULL,
+  Num_Buys INT NOT NULL,
+  Num_Sells INT NOT NULL,
+  Total_Buy_Jpy DOUBLE NOT NULL,
   Realized_Gain DOUBLE NOT NULL
 ) ENGINE='MyISAM';
 ");
 
-    my $sth_create = $dbh->prepare("INSERT INTO _Round_Trip (`Index`,Begin_Stamp,End_Stamp,Num_Tx,Realized_Gain) VALUES (?,?,?,?,?)");
+    my $sth_create = $dbh->prepare(<<'_');
+INSERT INTO _Round_Trip (
+  `Index`,First_Tx_Stamp,Last_Tx_Stamp,Weighted_Avg_Begin_Stamp,Weighted_Avg_End_Stamp,
+  Num_Tx,Num_Buys,Num_Sells,Total_Buy_Jpy,Realized_Gain)
+VALUES (
+  ?,?,?,FROM_UNIXTIME(?),FROM_UNIXTIME(?),
+  ?,?,?,?,?)
+_
 
     log_trace "Selecting users ...";
     my %Users;
     my $sth = $dbh->prepare("SELECT `Index` FROM _Trade2_By_Index");
     $sth->execute;
-    while (my @row = $sth->fetchrow_array) { $Users{$row[0]}++ }
+    while (my @row = $sth->fetchrow_array) {
+        if ($args{include_users}) {
+            next unless grep {$_ eq $row[0]} @{ $args{include_users} };
+        }
+        $Users{$row[0]}++;
+    }
 
     $progress->target(scalar keys %Users);
 
@@ -60,43 +85,85 @@ CREATE TABLE IF NOT EXISTS _Round_Trip (
 SELECT
   Type,
   Stamp,
-  -- UNIX_TIMESTAMP(Stamp) Stamp_Unix,
+  UNIX_TIMESTAMP(Stamp) Stamp_Unix,
+  Money_Jpy,
+  Bitcoins,
+  Bitcoins_Change,
   Balance_Bitcoins,
-  Tx_Realized_Gain
+  Tx_Realized_Gain,
+  Avg_Purchase_Price
 FROM _Trade2 t
 WHERE
   `Index`=$idx
-ORDER BY _rowid
+ORDER BY Stamp,_rowid
 _
         $sth->execute;
         my $prev_bal;
-        my $begin_stamp;
+        my $prev_avg_purchase_price;
+        my (@tx_stamps, @buy_times, @sell_times, @buy_weights, @sell_weights);
         my $realized_gain = 0;
-        my $num_tx;
+        my ($num_tx, $num_buys, $num_sells);
         while (my $row = $sth->fetchrow_hashref) {
+            next unless $row->{Bitcoins};
             $num_tx++;
+            #log_trace "TX #%d: %s", $num_tx, $row;
             if ($row->{Type} eq 'buy') {
                 if ((!defined($prev_bal) || $prev_bal == 0)) {
                     # start of a new round-trip, user starts from zero balance and opens a position
-                    $begin_stamp = $row->{Stamp};
                     $realized_gain = 0;
-                    $num_tx = 1;
+                    $num_tx = $num_buys = 1;
+                    $num_sells = 0;
+                    my $factor = $row->{Bitcoins_Change} / $row->{Bitcoins};
+                    @tx_stamps    = ($row->{Stamp});
+                    @buy_times    = ($row->{Stamp_Unix});
+                    @buy_weights  = ($factor * $row->{Money_Jpy});
+                    @sell_times   = ();
+                    @sell_weights = ();
+                } else {
+                    $num_buys++;
+                    my $factor = $row->{Bitcoins_Change} / $row->{Bitcoins};
+                    push @tx_stamps  , $row->{Stamp};
+                    push @buy_times  , $row->{Stamp_Unix};
+                    push @buy_weights, $factor * $row->{Money_Jpy};
                 }
             } else {
-                $realized_gain += $row->{Tx_Realized_Gain} // 0 if $begin_stamp;
-                if ($prev_bal && $row->{Balance_Bitcoins} == 0) {
-                    # end of a round-trip, user sells all and makes balance zero
-                    log_trace "ROUND-TRIP: User#$idx FROM $begin_stamp TO $row->{Stamp}: ".($realized_gain > 0 ? "GAIN" : $realized_gain < 0 ? "LOSS" : "NEUTRAL");
-                    $sth_create->execute(
-                        $idx,
-                        $begin_stamp,
-                        $row->{Stamp},
-                        $num_tx,
-                        $realized_gain,
-                    );
+                if ($prev_bal) {
+                    $realized_gain += $row->{Tx_Realized_Gain} // 0;
+                    $num_sells++;
+                    push @tx_stamps   , $row->{Stamp};
+                    push @sell_times  , $row->{Stamp_Unix};
+                    push @sell_weights, -$row->{Bitcoins_Change} * $prev_avg_purchase_price;
+                    if ($row->{Balance_Bitcoins} == 0) {
+                        # end of a round-trip, user sells all and makes balance zero
+                        log_trace "ROUND-TRIP: User#$idx FROM $tx_stamps[0] TO $tx_stamps[-1]: ".($realized_gain > 0 ? "GAIN" : $realized_gain < 0 ? "LOSS" : "NEUTRAL");
+
+                        my $wavg_buy_time =
+                            sum(map {  $buy_times [$_]*$buy_weights [$_] } 0..$#buy_times) /
+                            sum(@buy_weights);
+                        my $wavg_sell_time =
+                            sum(map { $sell_times[$_]*$sell_weights[$_] } 0..$#sell_times) /
+                            sum(@sell_weights);
+
+                        #log_trace "wavg_buy_time=<$wavg_buy_time>, wavg_sell_time=<$wavg_sell_time>";
+
+                        $sth_create->execute(
+                            $idx,
+                            $tx_stamps[0],
+                            $tx_stamps[-1],
+                            $wavg_buy_time,
+                            $wavg_sell_time,
+
+                            $num_tx,
+                            $num_buys,
+                            $num_sells,
+                            sum(@buy_weights),
+                            $realized_gain,
+                        );
+                    }
                 }
             }
             $prev_bal = $row->{Balance_Bitcoins};
+            $prev_avg_purchase_price = $row->{Avg_Purchase_Price};
         }
     }
     $progress->finish;

@@ -101,7 +101,7 @@ FROM _Trade2 t
 WHERE
   `Index`=$idx
   AND (_rowid=$Users{$idx}{_rowid} OR Stamp BETWEEN '$t1_mysql' AND '$t2_mysql')
-ORDER BY _rowid
+ORDER BY Stamp,_rowid
 _
         $sth->execute;
         my $num_tx = 0;

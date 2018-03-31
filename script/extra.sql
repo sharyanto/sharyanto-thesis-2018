@@ -30,6 +30,8 @@ INSERT INTO _Trade_Index_Exclude (`Index`,Note) SELECT DISTINCT `Index`, 'bot'  
 INSERT INTO _Trade_Index_Exclude (`Index`,Note) VALUES (634, 'bot');
 INSERT INTO _Trade_Index_Exclude (`Index`,Note) VALUES (179200, 'bot');
 INSERT INTO _Trade_Index_Exclude (`Index`,Note) VALUES (698630, 'bot'); -- "Markus"
+-- also these IDs by us
+INSERT INTO _Trade_Index_Exclude (`Index`,Note) VALUES (231, 'bot2'); -- weird pattern, buy+sell lots of 0.01 bitcoins at the same time
 
 -- this is trades which have excluded bots and special transactions. the columns
 -- are the same as Trade, but with some extra columns that contain statistics
