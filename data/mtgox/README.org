@@ -11,7 +11,8 @@ On Mar 9, 2014, it was [[https://techcrunch.com/2014/03/09/mt-gox-hack-allegedly
 Karpeles' blog and have uploaded a database dump of consumer data that,
 according to users with account on the site, is accurate.
 
-The database dump was uploaded with the name MtGox2014Leak.zip. It contains 3 kinds of information:
+The database dump was uploaded with the name MtGox2014Leak.zip. It contains 3
+kinds of information:
 
 - user's bitcoin & fiat balances (with the user identification already
   anonymized);
