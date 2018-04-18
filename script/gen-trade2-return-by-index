@@ -1,0 +1,225 @@
+#!/usr/bin/env perl
+
+# Before running this script, you have to already run the import-* scripts and
+# extra.sql. Also install the required CPAN modules.
+
+# This script calculate each user's returns for the whole sample period.
+
+use 5.010001;
+use strict;
+use warnings;
+use FindBin '$Bin';
+use Log::ger;
+#use Log::ger::DBI::Query;
+
+use DBIx::Connect::MySQL;
+use IPC::System::Options 'readpipe', -log=>1;
+use Perinci::CmdLine::Any;
+use Progress::Any '$progress';
+use Progress::Any::Output 'TermProgressBarColor';
+
+our %SPEC;
+
+$SPEC{app} = {
+    v => 1.1,
+    args => {
+        include_users => {
+            summary => 'Only include specified user ID(s)',
+            'x.name.is_plural' => 1,
+            'x.name.singular' => 'include_user',
+            schema => ['array*', of=>'posint*'],
+            tags => ['category:testing'],
+        },
+    },
+};
+sub app {
+    my %args = @_;
+
+    my $dbh = DBIx::Connect::MySQL->connect(
+        "dbi:mysql:database=mtgox", undef, undef, {RaiseError=>1});
+    $dbh->do("SET time_zone = '+00:00'");
+
+    log_trace "1. Creating table ...";
+$dbh->do("
+CREATE TABLE IF NOT EXISTS _Trade2_Return_By_Index_Period (
+  _rowid INT NOT NULL PRIMARY KEY AUTO_INCREMENT,
+  Period VARCHAR(32) NOT NULL,
+  `Index` INT NOT NULL, UNIQUE(`Index`, Period),
+  Num_Trades INT NOT NULL,
+  First_Tx_Stamp DATETIME,
+  Last_Tx_Stamp DATETIME,
+
+  Orig_Balance_Bitcoins DOUBLE NOT NULL,
+  Orig_Balance_Bitcoins_BV DOUBLE NOT NULL,
+  Total_Buy_Bitcoins DOUBLE NOT NULL,
+  Total_Buy_Jpy DOUBLE NOT NULL,
+  Total_Realized_Gain_Jpy DOUBLE NOT NULL,
+  Final_Balance_Bitcoins DOUBLE NOT NULL,
+  Final_Balance_Bitcoins_MV DOUBLE NOT NULL,
+  `Return` DOUBLE NOT NULL -- calculated as (Final_Balance_Jpy + Total_Realized_Gain_Jpy) / Total_Buy_Jpy
+) ENGINE='MyISAM';
+");
+
+    my $sth = $dbh->prepare(<<'_');
+SELECT *,UNIX_TIMESTAMP(Begin_Stamp) Begin_Stamp_Unix,UNIX_TIMESTAMP(End_Stamp) End_Stamp_Unix
+FROM _Period ORDER BY Begin_Stamp,End_Stamp DESC
+_
+    $sth->execute;
+    my @Periods;
+    while (my $row = $sth->fetchrow_hashref) { push @Periods, $row }
+
+    for my $period (@Periods) {
+        log_info "Processing period $period->{Name} ...";
+
+        my ($t1, $t2, $t1_mysql, $t2_mysql) = (
+            $period->{Begin_Stamp_Unix},
+            $period->{End_Stamp_Unix},
+            $period->{Begin_Stamp},
+            $period->{End_Stamp},
+        );
+
+        my $price_t2;
+        {
+            (my $t2_iso = "${t2_mysql}Z") =~ s/ /T/;
+            $price_t2 = `$Bin/lookup-historical-bitcoin-price '$t2_iso' --convert JPY`;
+        }
+        log_trace "2. Got price of bitcoin at t2 (%s) = %.8f", $t2_mysql, $price_t2;
+
+        my %Users; # key=Index, value=1
+        if ($args{include_users} && @{$args{include_users}}) {
+            $Users{$_} = 1 for @{$args{include_users}};
+        } else {
+            my $sth = $dbh->prepare("SELECT `Index` FROM _Trade2_By_Index");
+            $sth->execute;
+            while (my $row = $sth->fetchrow_hashref) {
+                $Users{ $row->{Index} } = 1;
+            }
+        }
+
+        log_trace "3. Listing users' transactions between t1 & t2 ...";
+        my $num_users = keys %Users;
+        $progress->pos(0);
+        $progress->target($num_users);
+        my $i = 0;
+        for my $idx (sort {$a<=>$b} keys %Users) {
+            $i++;
+            $progress->update(message => "Processing User Index #$idx", pos=>$i);
+
+            my $sth;
+
+            # find user's original book value before t1
+            my ($orig_balance_bitcoins, $orig_balance_bitcoins_bv);
+
+            $sth = $dbh->prepare(<<_);
+SELECT
+  *, UNIX_TIMESTAMP(Stamp) Stamp_Unix
+FROM _Trade2 t
+WHERE
+  `Index`=$idx
+  AND Stamp < '$t1_mysql'
+  AND Balance_Bitcoins > 0
+ORDER BY Stamp DESC,_rowid DESC
+LIMIT 1
+_
+            $sth->execute;
+            my $row = $sth->fetchrow_hashref;
+            if ($row) {
+                $orig_balance_bitcoins    = $row->{Balance_Bitcoins};
+                $orig_balance_bitcoins_bv = $row->{Balance_Bitcoins} * $row->{Avg_Purchase_Price};
+            } else {
+                $orig_balance_bitcoins = 0;
+                $orig_balance_bitcoins_bv = 0;
+            }
+
+            $sth = $dbh->prepare(<<_);
+SELECT
+  *, UNIX_TIMESTAMP(Stamp) Stamp_Unix
+FROM _Trade2 t
+WHERE
+  `Index`=$idx
+  AND (Stamp BETWEEN '$t1_mysql' AND '$t2_mysql')
+ORDER BY Stamp,_rowid
+_
+            $sth->execute;
+            my $num_tx = 0;
+            my $tot_rgain = 0;
+            my ($first_tx_stamp, $last_tx_stamp);
+            my $total_buy_bitcoins = 0;
+            my $total_buy_jpy = 0;
+            my $total_trade_jpy = 0;
+            my $total_trade_bitcoins = 0;
+            while (my $row0 = $sth->fetchrow_hashref) {
+                $row = $row0;
+                #log_trace "TX:%s", $row;
+                next unless $row->{Bitcoins} > 0; # a couple of rows has zero bitcoins
+                $num_tx++;
+                $first_tx_stamp = $row->{Stamp} unless $first_tx_stamp;
+                $last_tx_stamp  = $row->{Stamp};
+                my $price = $row->{Money_Jpy} / $row->{Bitcoins};
+                if ($row->{Type} eq 'buy') {
+                    $total_buy_bitcoins += $row->{Bitcoins_Change};
+                    $total_buy_jpy += $row->{Bitcoins_Change} * $price;
+                    $total_trade_bitcoins += $row->{Bitcoins_Change};
+                    $total_trade_jpy      += $row->{Bitcoins_Change} * $price;
+                } else {
+                    $tot_rgain += ($row->{Tx_Realized_Gain} // 0);
+                    $total_trade_bitcoins += -$row->{Bitcoins_Change};
+                    $total_trade_jpy      += -$row->{Bitcoins_Change} * $price;
+                }
+            }
+            my $p1 = $orig_balance_bitcoins_bv + $total_buy_jpy;
+            if ($p1 == 0) {
+                log_warn "p1 = 0 for User #$idx (user has never bought anything up to the end of this period), so it's impossible to calculate returns for the user, skipping user";
+                next;
+            }
+            my $p2 = $row->{Balance_Bitcoins} * $price_t2 + $tot_rgain; # final market value
+            my $return = ($p2 - $p1) / $p1;
+            #log_trace "User %6d: numtx=%d | start: btc=%.8f (book value %.3f) | end: btc=%.8f (price=%.3f, market value=%.3f) | tot_rgain=%.3f | return=%.3f",
+            #    $idx, $num_tx,
+            #    $Users{$idx}{Balance_Bitcoins}, $orig_balance_bitcoins_bv,
+            #    $row->{Balance_Bitcoins}, $price_t2, $final_market_value,
+            #    $tot_rgain,
+            #    $return;
+
+            my $sql = <<'_';
+INSERT INTO _Trade2_Return_By_Index_Period (
+  `Index`,Period,Num_Trades,First_Tx_Stamp,Last_Tx_Stamp,
+
+  Orig_Balance_Bitcoins, Orig_Balance_Bitcoins_BV,
+  Total_Buy_Bitcoins,Total_Buy_Jpy,
+  Total_Realized_Gain_Jpy,
+  Final_Balance_Bitcoins,Final_Balance_Bitcoins_MV,
+  `Return`
+) VALUES (
+  ?,?,?,?,?,
+
+  ?,?,
+  ?,?,
+  ?,
+  ?,?,
+  ?
+)
+_
+            $dbh->do(
+                $sql,
+                {},
+                $idx, $period->{Name}, $num_tx, $first_tx_stamp, $last_tx_stamp,
+
+                $orig_balance_bitcoins, $orig_balance_bitcoins_bv,
+                $total_buy_bitcoins, $total_buy_jpy,
+                $tot_rgain,
+                $row->{Balance_Bitcoins}, $row->{Balance_Bitcoins} * $price_t2,
+                $return,
+            );
+        } # for user
+    } # for period
+    $progress->finish;
+
+    [200, "OK"];
+}
+
+Perinci::CmdLine::Any->new(
+    url => '/main/app',
+    log => 1,
+    log_level => 'trace',
+)->run;

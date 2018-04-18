@@ -212,6 +212,7 @@ CREATE TABLE _Period (
 INSERT INTO _Period VALUES ('bull1', '2011-04-01 00:28:54', '2011-06-08 23:59:59');
 INSERT INTO _Period VALUES ('bear1', '2011-06-09 00:00:00', '2011-11-19 23:59:59');
 INSERT INTO _Period VALUES ('bull2', '2011-11-20 00:00:00', '2013-11-30 23:59:55');
+INSERT INTO _Period VALUES ('all'  , '2011-04-01 00:28:54', '2013-11-30 23:59:59');
 
 ---
 
@@ -317,3 +318,89 @@ CREATE TABLE _Trade_Index_With_Single_User (
 INSERT INTO _Trade_Index_Always_With_User
   SELECT `Index`, GROUP_CONCAT(DISTINCT `User__`) FROM Trade
   WHERE User__ IS NOT NULL AND User__<>'' GROUP BY `Index` HAVING COUNT(DISTINCT User__)=1;
+
+-- daily average price from transaction data (prices are all in Jpy). 1301616000
+-- is epoch for '2014-04-01 00:00:00 UTC'.
+CREATE TABLE _Daily_Average_Price_From_Trade2 (
+  Day INT NOT NULL PRIMARY KEY, -- day after beginning of sample period: 0, 1, ...
+  Begin_Stamp_Unix DOUBLE NOT NULL, UNIQUE(Begin_Stamp_Unix), -- unix timestamp of the beginning of the day (00:00:00 UTC)
+  Begin_Stamp DATETIME NOT NULL, UNIQUE(Begin_Stamp),
+  Highest DOUBLE NOT NULL, -- highest price of the day
+  Lowest  DOUBLE NOT NULL, -- lowest price of the day
+
+  -- simple average of pricing, but what's more appropriate to use is the value
+  -- (in-fiat) weighted average, because small bitcoin trade (e.g. 1 satoshi)
+  -- are often of extreme prices)
+  Average_Simple DOUBLE NOT NULL, -- simple average price of the day
+
+  Average_Weighted DOUBLE NOT NULL, -- value-weighted average price of the day
+
+  Num DOUBLE NOT NULL -- number of samples
+);
+INSERT INTO _Daily_Average_Price_From_Trade2
+  SELECT
+    FLOOR((UNIX_TIMESTAMP(Stamp) - 1301616000)/86400) Day,
+    ANY_VALUE(              1301616000 + FLOOR((UNIX_TIMESTAMP(Stamp) - 1301616000)/86400) * 86400)  AS Begin_Stamp_Unix,
+    ANY_VALUE(FROM_UNIXTIME(1301616000 + FLOOR((UNIX_TIMESTAMP(Stamp) - 1301616000)/86400) * 86400)) AS Begin_Stamp,
+    MAX(Money_Jpy/Bitcoins) Highest,
+    MIN(Money_Jpy/Bitcoins) Lowest,
+    AVG(Money_Jpy/Bitcoins) Average_Simple,
+    SUM(Money_Jpy)/SUM(Bitcoins) Average_Weighted,
+    COUNT(*) Num
+  FROM _Trade2
+  WHERE Bitcoins > 0
+  GROUP BY Day;
+
+-- daily average price from Price table (JPY). the price data for JPY is
+-- sometimes missing for the date that we want.
+CREATE TABLE _Daily_Average_Price_From_Price_Jpy (
+  Day INT NOT NULL PRIMARY KEY, -- day after beginning of sample period: 0, 1, ...
+  Begin_Stamp_Unix DOUBLE NOT NULL, UNIQUE(Begin_Stamp), -- unix timestamp of the beginning of the day (00:00:00 UTC)
+  Begin_Stamp DATETIME NOT NULL, UNIQUE(Begin_Stamp_Unix),
+  Highest DOUBLE NOT NULL, -- highest price of the day
+  Lowest  DOUBLE NOT NULL, -- lowest price of the day
+  Average_Simple DOUBLE NOT NULL, -- simple average price of the day
+  Num DOUBLE NOT NULL -- number of samples
+);
+INSERT INTO _Daily_Average_Price_From_Price_Jpy
+  SELECT
+    FLOOR((UNIX_TIMESTAMP(Stamp) - 1301616000)/86400) Day,
+    ANY_VALUE(              1301616000 + FLOOR((UNIX_TIMESTAMP(Stamp) - 1301616000)/86400) * 86400)  AS Begin_Stamp_Unix,
+    ANY_VALUE(FROM_UNIXTIME(1301616000 + FLOOR((UNIX_TIMESTAMP(Stamp) - 1301616000)/86400) * 86400)) AS Begin_Stamp,
+    MAX(Price) Highest,
+    MIN(Price) Lowest,
+    AVG(Price) Average_Simple,
+    COUNT(*) Num
+  FROM Price
+  WHERE Currency__='JPY'
+  GROUP BY Day;
+
+-- daily average price from Price table (USD but converted to JPY). the price
+-- data for USD the most abundant
+CREATE TABLE _Daily_Average_Price_From_Price_Usd (
+  Day INT NOT NULL PRIMARY KEY, -- day after beginning of sample period: 0, 1, ...
+  Begin_Stamp_Unix DOUBLE NOT NULL, UNIQUE(Begin_Stamp_Unix), -- unix timestamp of the beginning of the day (00:00:00 UTC)
+  Begin_Stamp DATETIME NOT NULL, UNIQUE(Begin_Stamp),
+  Highest DOUBLE NOT NULL, -- highest price of the day
+  Lowest  DOUBLE NOT NULL, -- lowest price of the day
+  Average_Simple DOUBLE NOT NULL, -- simple average price of the day
+  Num DOUBLE NOT NULL -- number of samples
+);
+INSERT INTO _Daily_Average_Price_From_Price_Usd
+  SELECT
+    FLOOR((UNIX_TIMESTAMP(Stamp) - 1301616000)/86400) Day,
+    ANY_VALUE(              1301616000 + FLOOR((UNIX_TIMESTAMP(Stamp) - 1301616000)/86400) * 86400)  AS Begin_Stamp_Unix,
+    ANY_VALUE(FROM_UNIXTIME(1301616000 + FLOOR((UNIX_TIMESTAMP(Stamp) - 1301616000)/86400) * 86400)) AS Begin_Stamp,
+    MAX(Price) Highest,
+    MIN(Price) Lowest,
+    AVG(Price) Average_Simple,
+    COUNT(*) Num
+  FROM Price
+  WHERE Currency__='USD'
+  GROUP BY Day;
+-- convert USD prices to JPY
+UPDATE _Daily_Average_Price_From_Price_Usd t1 SET
+  Highest       =Highest       *(SELECT Price FROM Fxrate t2 WHERE Currency1='USD' AND Currency2='JPY' ORDER BY ABS(DATEDIFF(t1.Begin_Stamp, t2.Stamp)) LIMIT 1),
+  Lowest        =Lowest        *(SELECT Price FROM Fxrate t2 WHERE Currency1='USD' AND Currency2='JPY' ORDER BY ABS(DATEDIFF(t1.Begin_Stamp, t2.Stamp)) LIMIT 1),
+  Average_Simple=Average_Simple*(SELECT Price FROM Fxrate t2 WHERE Currency1='USD' AND Currency2='JPY' ORDER BY ABS(DATEDIFF(t1.Begin_Stamp, t2.Stamp)) LIMIT 1)
+  ;

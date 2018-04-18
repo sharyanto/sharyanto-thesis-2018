@@ -3,6 +3,9 @@
 # Before running this script, you have to already run the import-* scripts. Also
 # install the required CPAN modules.
 
+# this script calculates {hourly,daily,weekly,monthly} bitcoin returns from the
+# Price table.
+
 use 5.010001;
 use strict;
 use warnings;
@@ -26,7 +29,7 @@ while (my @row = $sth->fetchrow_array) {
 }
 
 $dbh->do("
-CREATE TABLE IF NOT EXISTS _Hourly_Return (
+CREATE TABLE _Hourly_Return (
   _rowid INT NOT NULL PRIMARY KEY AUTO_INCREMENT,
   Stamp DATETIME NOT NULL, UNIQUE(Stamp),
   Currency__ CHAR(3) NOT NULL,
@@ -36,7 +39,7 @@ CREATE TABLE IF NOT EXISTS _Hourly_Return (
 ) ENGINE='MyISAM';
 ");
 $dbh->do("
-CREATE TABLE IF NOT EXISTS _Daily_Return (
+CREATE TABLE _Daily_Return (
   _rowid INT NOT NULL PRIMARY KEY AUTO_INCREMENT,
   Stamp DATETIME NOT NULL, UNIQUE(Stamp),
   Currency__ CHAR(3) NOT NULL,
@@ -46,7 +49,7 @@ CREATE TABLE IF NOT EXISTS _Daily_Return (
 ) ENGINE='MyISAM';
 ");
 $dbh->do("
-CREATE TABLE IF NOT EXISTS _Weekly_Return (
+CREATE TABLE _Weekly_Return (
   _rowid INT NOT NULL PRIMARY KEY AUTO_INCREMENT,
   Stamp DATETIME NOT NULL, UNIQUE(Stamp),
   Currency__ CHAR(3) NOT NULL,
@@ -56,7 +59,7 @@ CREATE TABLE IF NOT EXISTS _Weekly_Return (
 ) ENGINE='MyISAM';
 ");
 $dbh->do("
-CREATE TABLE IF NOT EXISTS _Monthly_Return (
+CREATE TABLE _Monthly_Return (
   _rowid INT NOT NULL PRIMARY KEY AUTO_INCREMENT,
   Stamp DATETIME NOT NULL, UNIQUE(Stamp),
   Currency__ CHAR(3) NOT NULL,

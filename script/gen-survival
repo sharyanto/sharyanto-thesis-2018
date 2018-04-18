@@ -1,0 +1,327 @@
+#!/usr/bin/env perl
+
+# Before running this script, you have to already run the import-* scripts,
+# extra.sql, and gen-daily-average-price. Also install the required CPAN
+# modules.
+
+# Generate survival data to be fed to Stata or other survival analysis package.
+
+use 5.010001;
+use strict;
+use warnings;
+use FindBin '$Bin';
+use Log::ger;
+#use Log::ger::DBI::Query;
+
+use DateTime;
+use DBIx::Connect::MySQL;
+use IPC::System::Options 'readpipe', -log=>1;
+use List::Util qw(sum);
+use Perinci::CmdLine::Any;
+use Progress::Any '$progress';
+use Progress::Any::Output 'TermProgressBarColor';
+
+our %SPEC;
+
+$SPEC{app} = {
+    v => 1.1,
+    args => {
+        include_users => {
+            summary => 'Only include specified user ID(s)',
+            'x.name.is_plural' => 1,
+            'x.name.singular' => 'include_user',
+            schema => ['array*', of=>'posint*', "x.perl.coerce_rules"=>["str_int_range_and_comma_sep"]],
+            tags => ['category:testing'],
+        },
+        gain_los_determination_method => {
+            schema => ['str*', in=>['avg', 'min_max']],
+            description => <<'_',
+
+If `avg`, then TLI/TGI is determined by whether the average purchase price on a
+certain day is higher/lower than average bitcoin price on that day.
+
+If `min_max`, then TLI/TGI is determined by whether the average purchase price
+on a certain day is higher than the highest bitcoin price on that day/lower than
+the lowest bitcoin price on that day.
+
+_
+            default => 'min_max',
+        },
+    },
+};
+sub app {
+    my %args = @_;
+
+    my $dbh = DBIx::Connect::MySQL->connect(
+        "dbi:mysql:database=mtgox", undef, undef, {RaiseError=>1});
+    $dbh->do("SET time_zone = '+00:00'");
+
+    log_info "1. Creating table ...";
+$dbh->do("
+CREATE TABLE IF NOT EXISTS _Survival (
+  _rowid INT NOT NULL PRIMARY KEY AUTO_INCREMENT,
+  `Index` INT NOT NULL,
+  Day INT NOT NULL, -- day after beginning of sample period: 0, 1, ...
+  UNIQUE(`Index`,Day),
+
+  -- dependent variable
+  Sold TINYINT NOT NULL, -- 1=sell-off, 0=no
+
+  -- covariates
+  TLI TINYINT NOT NULL, -- trading loss indicator, 1=bitcoin is trading lower  than average purchase price (holding is in paper loss position)
+  TGI TINYINT NOT NULL  -- trading gain indicator, 1=bitcoin is trading higher than average purchase price (holding is in paper gain position)
+
+) ENGINE='MyISAM';
+");
+
+    my $method = $args{gain_los_determination_method} // 'min_max';
+
+    my ($t1, $t2) = $dbh->selectrow_array(<<'_');
+SELECT
+  UNIX_TIMESTAMP(MIN(Stamp)), UNIX_TIMESTAMP(MAX(Stamp))
+FROM _Trade2
+_
+    my $dt1 = DateTime->from_epoch(epoch => $t1, time_zone=>'UTC');
+    my $dt1_bod = $dt1->clone; $dt1_bod->set(hour=>0, minute=>0, second=>0);
+    my $dt2 = DateTime->from_epoch(epoch => $t2, time_zone=>'UTC');
+
+    my $num_days = int(($dt2->epoch - $dt1_bod->epoch)/86400);
+
+    log_info "2. Getting daily average/min/max prices ...";
+    my %avg_prices;     # key=day (0, 1, ...)
+    my %highest_prices; # key=day (0, 1, ...)
+    my %lowest_prices;  # key=day (0, 1, ...)
+    {
+        my $sth;
+
+        my %avg_prices_from_price_usd;
+        my %highest_prices_from_price_usd;
+        my %lowest_prices_from_price_usd;
+        $sth = $dbh->prepare("SELECT Day,Average_Simple,Highest,Lowest FROM _Daily_Average_Price_From_Price_Usd");
+        $sth->execute;
+        while (my @row = $sth->fetchrow_array) {
+            $avg_prices_from_price_usd{$row[0]}     = $row[1];
+            $highest_prices_from_price_usd{$row[0]} = $row[2];
+            $lowest_prices_from_price_usd{$row[0]}  = $row[3];
+        }
+
+        my %avg_prices_from_price_jpy;
+        my %highest_prices_from_price_jpy;
+        my %lowest_prices_from_price_jpy;
+        $sth = $dbh->prepare("SELECT Day,Average_Simple,Highest,Lowest FROM _Daily_Average_Price_From_Price_Jpy");
+        $sth->execute;
+        while (my @row = $sth->fetchrow_array) {
+            $avg_prices_from_price_jpy{$row[0]}     = $row[1];
+            $highest_prices_from_price_jpy{$row[0]} = $row[2];
+            $lowest_prices_from_price_jpy{$row[0]}  = $row[3];
+        }
+
+        my %avg_prices_from_trade2;
+        my %highest_prices_from_trade2;
+        my %lowest_prices_from_trade2;
+        $sth = $dbh->prepare("SELECT Day,Average_Weighted,Highest,Lowest FROM _Daily_Average_Price_From_Trade2");
+        $sth->execute;
+        while (my @row = $sth->fetchrow_array) {
+            $avg_prices_from_trade2{$row[0]}     = $row[1];
+            $highest_prices_from_trade2{$row[0]} = $row[2];
+            $lowest_prices_from_trade2{$row[0]}  = $row[3];
+        }
+
+        for my $day (0..$num_days) {
+
+            my $avg = $avg_prices_from_price_usd{$day} //
+                $avg_prices_from_price_jpy{$day} //
+                $avg_prices_from_trade2{$day};
+            unless (defined $avg) {
+                warn "There is no price data for day $day";
+                $avg = $avg_prices{ $day-1 };
+                defined $avg or die;
+            }
+            $avg_prices{$day} = $avg;
+
+            my $highest = $highest_prices_from_price_usd{$day} //
+                $highest_prices_from_price_jpy{$day} //
+                $highest_prices_from_trade2{$day};
+            unless (defined $highest) {
+                $highest = $highest_prices{ $day-1 };
+                defined $highest or die;
+            }
+            $highest_prices{$day} = $highest;
+
+            my $lowest = $lowest_prices_from_price_usd{$day} //
+                $lowest_prices_from_price_jpy{$day} //
+                $lowest_prices_from_trade2{$day};
+            unless (defined $lowest) {
+                $lowest = $lowest_prices{ $day-1 };
+                defined $lowest or die;
+            }
+            $lowest_prices{$day} = $lowest;
+
+        }
+    } # getting daily price data
+
+    log_info "3. Getting list of users ...";
+    my %users; # key=Index, value=1
+    if ($args{include_users} && @{$args{include_users}}) {
+        $users{$_} = 1 for @{$args{include_users}};
+    } else {
+        my $sth = $dbh->prepare("SELECT `Index` FROM _Trade2_By_Index");
+        $sth->execute;
+        while (my $row = $sth->fetchrow_hashref) {
+            $users{ $row->{Index} } = 1;
+        }
+    }
+
+    my $sth_insert = $dbh->prepare("INSERT INTO _Survival (`Index`,Day,Sold,TLI,TGI) VALUES (?,?,?,?,?)");
+
+    log_info "4. Generating survival data for users ...";
+    $progress->target(scalar keys %users);
+    for my $idx (sort {$a <=> $b} keys %users) {
+        $progress->update(message => "Processing for user #$idx");
+
+        # get list of users transactions (excluding those before the first buy
+        # and "over-sell-offs") and group them by day
+        my %txs; # key=day, val=[\%tx1, \%tx2, ...]
+        my $sth = $dbh->prepare("SELECT *, UNIX_TIMESTAMP(Stamp) Stamp_Unix FROM _Trade2 WHERE `Index`=$idx AND Bitcoins_Change<>0 ORDER BY Stamp, _rowid");
+        $sth->execute;
+        while (my $row = $sth->fetchrow_hashref) {
+            my $day = int(($row->{Stamp_Unix} - $dt1_bod->epoch)/86400);
+            $txs{$day} //= [];
+            push @{ $txs{$day} }, $row;
+        }
+
+        #use DD; dd \%txs;
+
+        my $last_avg_purchase_price; # last average purchase price recorded in transaction
+      DAY:
+        for my $day (0..$num_days) {
+            my $ts_bod = $dt1_bod->epoch + $day * 86400;
+
+            log_trace("Index#%-6d Day=%3d", $idx, $day);
+
+            my @sell_off_txs;
+            if ($txs{$day}) {
+                @sell_off_txs = grep {
+                    $_->{Type} eq 'sell' && $_->{Balance_Bitcoins} == 0
+                } @{ $txs{$day} };
+            }
+
+            # do we experience a sell-off ("event") on this day?
+            my $sold = @sell_off_txs ? 1:0;
+
+            my $do_measure; # whether we should record today's survival
+            my $this_day_avg_purchase_price;
+
+            if ($sold) {
+                # "event" happens.
+                $do_measure = 1;
+            } else {
+                # "event" does not happen
+
+                my @buy_txs;
+                if ($txs{$day}) {
+                    @buy_txs = grep { $_->{Type} eq 'buy' } @{ $txs{$day} };
+                }
+                #log_trace "  Num of buy txs: %d", scalar(@buy_txs);
+
+                if (@buy_txs) {
+                    # there are buy transactions on this day (which modifies
+                    # average purchase price), calculate this day's average
+                    # purchase price which is a time-weighted average of
+                    # avg_purchase_price's in the tx's.
+                    $do_measure = 1;
+                    my @weights;
+                    my @prices;
+                    my ($lasttx_second, $tx);
+                    for my $i (0..$#buy_txs) {
+                        $tx = $buy_txs[$i];
+                        my $second = $tx->{Stamp_Unix} - $ts_bod; # second of the day
+                        if ($i == 0) {
+                            if (defined $last_avg_purchase_price) {
+                                push @prices , $last_avg_purchase_price;
+                                push @weights, $second;
+                            }
+                        } else {
+                            push @prices, $tx->{Avg_Purchase_Price};
+                            push @weights, $second - $lasttx_second;
+                        }
+                        $lasttx_second = $second;
+                    }
+                    push @prices , $tx->{Avg_Purchase_Price};
+                    push @weights, 86400-$lasttx_second;
+
+                    my $sum_products = sum(map { $prices[$_] * $weights[$_] } 0..$#prices);
+                    my $sum_weights = sum(@weights);
+                    $this_day_avg_purchase_price = $sum_products / $sum_weights;
+                    log_trace "  This day's average purchase price: %.3f (prices=%s, weights=%s)",
+                        $this_day_avg_purchase_price, \@prices, \@weights;
+
+                } else {
+                    # there are no buy transaction on this day
+                    if (defined $last_avg_purchase_price) {
+                        # user currently has balance, we just use last average
+                        # purchase price
+                        $do_measure = 1;
+                        $this_day_avg_purchase_price = $last_avg_purchase_price;
+                    } else {
+                        # user currently does not have balance, so we cannot
+                        # measure her paper loss/gain, skip this day
+                        goto L1;
+                    }
+                }
+            }
+
+          L1:
+
+            $last_avg_purchase_price = $txs{$day}[-1]{Avg_Purchase_Price}
+                if $txs{$day};
+
+            log_trace("  Sold=%s, do_measure=%s",
+                      $sold,$do_measure);
+
+            next DAY unless $do_measure;
+
+            my ($tli, $tgi);
+            if ($sold) {
+                # we use gain/loss from the first sell_off
+                $tli = $sell_off_txs[0]{Tx_Realized_Gain} < 0 ? 1:0;
+                $tgi = $sell_off_txs[0]{Tx_Realized_Gain} > 0 ? 1:0;
+                log_trace("  tx realized gain=%.f", $sell_off_txs[0]{Tx_Realized_Gain});
+            } else {
+                if ($method eq 'avg') {
+                    $tli = $this_day_avg_purchase_price > $avg_prices{$day} ? 1:0;
+                    $tgi = $this_day_avg_purchase_price < $avg_prices{$day} ? 1:0;
+                    log_trace("  this day's avgpp=%.3f, this day's average bitcoin price=%.3f",
+                              $this_day_avg_purchase_price, $avg_prices{$day});
+                } else {
+                    $tli = $this_day_avg_purchase_price > $highest_prices{$day} ? 1:0;
+                    $tgi = $this_day_avg_purchase_price < $lowest_prices{$day}  ? 1:0;
+                    log_trace("  this day's avgpp=%.3f, this day's bitcoin price range=%.3f - %.3f",
+                              $this_day_avg_purchase_price, $lowest_prices{$day}, $highest_prices{$day});
+                }
+            }
+
+            log_trace("  TLI=%s, TGI=%s",
+                      $tli, $tgi,
+                      $this_day_avg_purchase_price,
+                  );
+
+            $sth_insert->execute(
+                $idx,
+                $day,
+                $sold,
+                $tli,
+                $tgi,
+            );
+        } # for day
+    } # for user
+    $progress->finish;
+
+    [200, "OK"];
+}
+
+Perinci::CmdLine::Any->new(
+    url => '/main/app',
+    log => 1,
+    log_level => 'trace',
+)->run;

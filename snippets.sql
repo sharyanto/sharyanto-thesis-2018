@@ -44,3 +44,12 @@ SELECT
 FROM _Round_Trip r, _Period p
 GROUP BY p.Name, status
 ORDER BY p.Name, status;
+
+-- select only survival data until the first sold for every user. UPDATE: ugh
+-- this is too slow on my laptop, ~1h and still not finished. alternatively, use
+-- the provided `get-survival-data-until-first-failure-only` script which runs
+-- ~2 minutes. 30.8mil rows.
+SELECT
+  Day,`Index`,Sold,TLI,TGI,
+  (SELECT MIN(Day) from _Survival WHERE `Index`=s1.`Index` AND Sold=1) dayfirstsold
+FROM _Survival s1 GROUP BY Day,`Index` HAVING Day<=dayfirstsold;
