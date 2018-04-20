@@ -1,0 +1,40 @@
+#!/usr/bin/env perl
+
+use 5.010001;
+use strict;
+use warnings;
+use FindBin '$Bin';
+use Log::ger;
+#use Log::ger::DBI::Query;
+
+use DateTime;
+use DBIx::Connect::MySQL;
+
+my $dbh = DBIx::Connect::MySQL->connect(
+    "dbi:mysql:database=mtgox", undef, undef, {RaiseError=>1});
+$dbh->do("SET time_zone = '+00:00'");
+
+$dbh->do("
+CREATE TABLE IF NOT EXISTS _Trader_Rank_By_Num_Trades (
+  `Index` INT NOT NULL PRIMARY KEY,
+  Rank INT NOT NULL,
+  Percentile DOUBLE NOT NULL, INDEX(Percentile)
+) ENGINE='MyISAM';
+");
+
+my ($num_traders) = $dbh->selectrow_array('SELECT COUNT(*) FROM _Trade2_By_Index');
+my $sth_ins = $dbh->prepare('INSERT INTO _Trader_Rank_By_Num_Trades (`Index`, Rank, Percentile) VALUES (?,?,?)');
+my $sth_sel = $dbh->prepare('SELECT `Index`, Num_Trades FROM _Trade2_By_Index ORDER BY Num_Trades DESC');
+$sth_sel->execute;
+my $row_num = 0;
+my $rank;
+my @prev_row;
+while (my @row = $sth_sel->fetchrow_array) {
+    if (!@prev_row || $row[1] < $prev_row[1]) {
+        $rank = $row_num+1;
+    }
+    $sth_ins->execute($row[0], $rank, ($num_traders - $rank + 1)/$num_traders * 100);
+    $row_num++;
+    #use DD; dd {rank=>$rank, row_num=>$row_num, row=>\@row, prev_row=>\@prev_row};
+    @prev_row = @row;
+}

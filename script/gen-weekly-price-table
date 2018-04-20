@@ -1,0 +1,110 @@
+#!/usr/bin/env perl
+
+use 5.010001;
+use strict;
+use warnings;
+use FindBin '$Bin';
+use Log::ger;
+#use Log::ger::DBI::Query;
+
+use DateTime;
+use DBIx::Connect::MySQL;
+
+my $dbh = DBIx::Connect::MySQL->connect(
+    "dbi:mysql:database=mtgox", undef, undef, {RaiseError=>1});
+$dbh->do("SET time_zone = '+00:00'");
+
+$dbh->do("
+CREATE TABLE IF NOT EXISTS _Weekly_Price (
+  Week INT NOT NULL PRIMARY KEY,
+  Average DOUBLE NOT NULL,
+  Lowest DOUBLE NOT NULL,
+  Highest DOUBLE NOT NULL
+) ENGINE='MyISAM';
+");
+
+my ($t1, $t2) = $dbh->selectrow_array(<<'_');
+SELECT
+  UNIX_TIMESTAMP(MIN(Stamp)), UNIX_TIMESTAMP(MAX(Stamp))
+FROM _Trade2
+_
+my $dt1 = DateTime->from_epoch(epoch => $t1, time_zone=>'UTC');
+my $dt1_bod = $dt1->clone; $dt1_bod->set(hour=>0, minute=>0, second=>0);
+my $dt2 = DateTime->from_epoch(epoch => $t2, time_zone=>'UTC');
+
+my $num_weeks = int(($dt2->epoch - $dt1_bod->epoch)/86400/7);
+
+my %avg_prices;
+my %lowest_prices;
+my %highest_prices;
+{
+    my $sth;
+
+    my %avg_prices_from_price_usd;
+    my %highest_prices_from_price_usd;
+    my %lowest_prices_from_price_usd;
+    $sth = $dbh->prepare("SELECT Week,Average_Simple,Highest,Lowest FROM _Weekly_Price_From_Price_Usd");
+    $sth->execute;
+    while (my @row = $sth->fetchrow_array) {
+        $avg_prices_from_price_usd{$row[0]}     = $row[1];
+        $highest_prices_from_price_usd{$row[0]} = $row[2];
+        $lowest_prices_from_price_usd{$row[0]}  = $row[3];
+    }
+
+    my %avg_prices_from_price_jpy;
+    my %highest_prices_from_price_jpy;
+    my %lowest_prices_from_price_jpy;
+    $sth = $dbh->prepare("SELECT Week,Average_Simple,Highest,Lowest FROM _Weekly_Price_From_Price_Jpy");
+    $sth->execute;
+    while (my @row = $sth->fetchrow_array) {
+        $avg_prices_from_price_jpy{$row[0]}     = $row[1];
+        $highest_prices_from_price_jpy{$row[0]} = $row[2];
+        $lowest_prices_from_price_jpy{$row[0]}  = $row[3];
+    }
+
+    my %avg_prices_from_trade2;
+    my %highest_prices_from_trade2;
+    my %lowest_prices_from_trade2;
+    $sth = $dbh->prepare("SELECT Week,Average_Weighted,Highest,Lowest FROM _Weekly_Price_From_Trade2");
+    $sth->execute;
+    while (my @row = $sth->fetchrow_array) {
+        $avg_prices_from_trade2{$row[0]}     = $row[1];
+        $highest_prices_from_trade2{$row[0]} = $row[2];
+        $lowest_prices_from_trade2{$row[0]}  = $row[3];
+    }
+
+    for my $week (-1..$num_weeks+1) {
+
+        my $avg = $avg_prices_from_price_usd{$week} //
+            $avg_prices_from_price_jpy{$week} //
+            $avg_prices_from_trade2{$week};
+        unless (defined $avg) {
+            warn "There is no price data for week $week";
+            $avg = $avg_prices{ $week-1 };
+            defined $avg or die;
+        }
+        $avg_prices{$week} = $avg;
+
+        my $highest = $highest_prices_from_price_usd{$week} //
+            $highest_prices_from_price_jpy{$week} //
+            $highest_prices_from_trade2{$week};
+        unless (defined $highest) {
+            $highest = $highest_prices{ $week-1 };
+            defined $highest or die;
+        }
+        $highest_prices{$week} = $highest;
+
+        my $lowest = $lowest_prices_from_price_usd{$week} //
+            $lowest_prices_from_price_jpy{$week} //
+            $lowest_prices_from_trade2{$week};
+        unless (defined $lowest) {
+            $lowest = $lowest_prices{ $week-1 };
+            defined $lowest or die;
+        }
+        $lowest_prices{$week} = $lowest;
+
+        $dbh->do("INSERT INTO _Weekly_Price (Week,Average,Lowest,Highest) VALUES (?,?,?,?)", {},
+                 $week, $avg, $lowest, $highest);
+    }
+
+} # getting daily price data

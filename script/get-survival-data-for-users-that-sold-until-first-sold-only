@@ -1,0 +1,30 @@
+#!/usr/bin/env perl
+
+# before running this script, you need to have already run gen-survival script
+# first.
+
+use 5.010001;
+use strict;
+use warnings;
+
+use DBIx::Connect::MySQL;
+my $dbh = DBIx::Connect::MySQL->connect(
+    "dbi:mysql:database=mtgox", undef, undef, {RaiseError=>1});
+$dbh->do("SET time_zone = '+00:00'");
+
+my %users; # key=Index, value=1
+my $sth = $dbh->prepare("SELECT DISTINCT `Index` FROM _Round_Trip");
+$sth->execute;
+while (my $row = $sth->fetchrow_hashref) {
+    $users{ $row->{Index} } = 1;
+}
+
+say "Day\tIndex\tSold\tTLI\tTGI";
+for my $idx (sort {$a<=>$b} keys %users) {
+    $sth = $dbh->prepare("SELECT Day, `Index`, Sold, TLI, TGI FROM _Survival WHERE `Index`=$idx ORDER BY Day");
+    $sth->execute;
+    while (my $row = $sth->fetchrow_arrayref) {
+        say join("\t", @$row);
+        last if $row->[2];
+    }
+}

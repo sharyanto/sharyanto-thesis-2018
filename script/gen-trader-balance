@@ -1,0 +1,178 @@
+#!/usr/bin/env perl
+
+use 5.010001;
+use strict;
+use warnings;
+use FindBin '$Bin';
+use Log::ger;
+#use Log::ger::DBI::Query;
+
+use DBIx::Connect::MySQL;
+use List::Util qw(min max sum);
+use Perinci::CmdLine::Any;
+use Progress::Any '$progress';
+use Progress::Any::Output 'TermProgressBarColor';
+
+our %SPEC;
+
+$SPEC{app} = {
+    v => 1.1,
+    args => {
+        include_users => {
+            summary => 'Only include specified user ID(s)',
+            'x.name.is_plural' => 1,
+            'x.name.singular' => 'include_user',
+            schema => ['array*', of=>'posint*', "x.perl.coerce_rules"=>["str_int_range_and_comma_sep"]],
+            tags => ['category:testing'],
+        },
+    },
+};
+sub app {
+    my %args = @_;
+
+    my $dbh = DBIx::Connect::MySQL->connect(
+    "dbi:mysql:database=mtgox", undef, undef, {RaiseError=>1});
+    $dbh->do("SET time_zone = '+00:00'");
+
+    log_info "1. Creating table ...";
+    $dbh->do("
+CREATE TABLE IF NOT EXISTS _Trader_Balance (
+  `Index` INT NOT NULL,
+  Period VARCHAR(32) NOT NULL,
+  UNIQUE(`Index`,Period),
+
+  Lowest_Bitcoins           DOUBLE NOT NULL,
+  Highest_Bitcoins          DOUBLE NOT NULL,
+  Average_Simple_Bitcoins   DOUBLE NOT NULL,
+  Average_Weighted_Bitcoins DOUBLE NOT NULL, -- time-weighted
+
+  Lowest_Bitcoins_Book_Value           DOUBLE NOT NULL,
+  Highest_Bitcoins_Book_Value          DOUBLE NOT NULL,
+  Average_Simple_Bitcoins_Book_Value   DOUBLE NOT NULL,
+  Average_Weighted_Bitcoins_Book_Value DOUBLE NOT NULL, -- time-weighted
+
+  Lowest_Bitcoins_Market_Value           DOUBLE NOT NULL,
+  Highest_Bitcoins_Market_Value          DOUBLE NOT NULL,
+  Average_Simple_Bitcoins_Market_Value   DOUBLE NOT NULL,
+  Average_Weighted_Bitcoins_Market_Value DOUBLE NOT NULL -- time-weighted
+
+) ENGINE='MyISAM'
+");
+
+    my $sth_ins = $dbh->prepare(<<'_');
+INSERT INTO _Trader_Balance (
+  `Index`,Period,
+  Lowest_Bitcoins,Highest_Bitcoins,Average_Simple_Bitcoins,Average_Weighted_Bitcoins,
+  Lowest_Bitcoins_Book_Value,Highest_Bitcoins_Book_Value,Average_Simple_Bitcoins_Book_Value,Average_Weighted_Bitcoins_Book_Value,
+  Lowest_Bitcoins_Market_Value,Highest_Bitcoins_Market_Value,Average_Simple_Bitcoins_Market_Value,Average_Weighted_Bitcoins_Market_Value
+) VALUES (
+  ?,?,
+  ?,?,?,?,
+  ?,?,?,?,
+  ?,?,?,?
+)
+_
+
+    log_info "3. Getting list of periods ...";
+    my @periods; # values = {record}, ...
+    my $sth = $dbh->prepare("SELECT *,UNIX_TIMESTAMP(Begin_Stamp) Begin_Stamp_Unix,UNIX_TIMESTAMP(End_Stamp) End_Stamp_Unix FROM _Period ORDER BY Begin_Stamp, End_Stamp");
+    $sth->execute;
+    while (my $row = $sth->fetchrow_hashref) { push @periods, $row }
+
+    log_info "3. Getting list of users ...";
+    my %users; # key=Index, value=1
+    if ($args{include_users} && @{$args{include_users}}) {
+        $users{$_} = 1 for @{$args{include_users}};
+    } else {
+        my $sth = $dbh->prepare("SELECT `Index` FROM _Trade2_By_Index");
+        $sth->execute;
+        while (my $row = $sth->fetchrow_hashref) {
+            $users{ $row->{Index} } = 1;
+        }
+    }
+
+    log_info "4. Calculating balances ...";
+    $progress->target(scalar keys %users);
+    for my $idx (sort {$a<=>$b} keys %users) {
+        $progress->update(message => "Processing for user #$idx");
+        for my $period (@periods) {
+            my $t1      = $period->{Begin_Stamp};
+            my $t2      = $period->{End_Stamp};
+            my $t1_unix = $period->{Begin_Stamp_Unix};
+            my $t2_unix = $period->{End_Stamp_Unix};
+
+            my @btc;
+            my @btc_bv;
+            my @btc_mv;
+            my @weights;
+
+            my $row_before = $dbh->selectrow_hashref("SELECT *,UNIX_TIMESTAMP(Stamp) Stamp_Unix FROM _Trade2 WHERE `Index`=$idx AND Stamp<'$t1' ORDER BY Stamp DESC LIMIT 1");
+            my $row_after  = $dbh->selectrow_hashref("SELECT *,UNIX_TIMESTAMP(Stamp) Stamp_Unix FROM _Trade2 WHERE `Index`=$idx AND Stamp>'$t2' ORDER BY Stamp      LIMIT 1");
+
+            my $sth = $dbh->prepare("SELECT *,UNIX_TIMESTAMP(Stamp) Stamp_Unix FROM _Trade2 WHERE `Index`=$idx AND Stamp BETWEEN '$t1' AND '$t2' ORDER BY Stamp,_rowid");
+            $sth->execute;
+            my ($last_tx);
+            my $i = 0;
+            while (my $row = $sth->fetchrow_hashref) {
+                $i++;
+                if ($i == 1) {
+                    if ($row_before) {
+                        push @btc    , $row_before->{Balance_Bitcoins};
+                        push @btc_bv , $row_before->{Balance_Bitcoins_Book_Value};
+                        push @btc_mv , $row_before->{Balance_Bitcoins_Market_Value};
+                        push @weights, $row->{Stamp_Unix} - $t1_unix;
+                    }
+                    $last_tx = $row;
+                }
+                push @btc    , $last_tx->{Balance_Bitcoins};
+                push @btc_bv , $last_tx->{Balance_Bitcoins_Book_Value};
+                push @btc_mv , $last_tx->{Balance_Bitcoins_Market_Value};
+                push @weights, $row->{Stamp_Unix} - $last_tx->{Stamp_Unix};
+                $last_tx = $row;
+            } # for row
+            if ($last_tx) {
+                push @btc    , $last_tx->{Balance_Bitcoins};
+                push @btc_bv , $last_tx->{Balance_Bitcoins_Book_Value};
+                push @btc_mv , $last_tx->{Balance_Bitcoins_Market_Value};
+                push @weights, $t2_unix - $last_tx->{Stamp_Unix};
+            }
+
+            #use DD; dd {period=>$period->{Name}, btc=>\@btc, btc_bv=>\@btc_bv, btc_mv=>\@btc_mv, weights=>\@weights};
+
+            my $n = @weights;
+            my $sumw = sum(@weights);
+
+            my $min_btc  = min(@btc) // 0;
+            my $max_btc  = max(@btc) // 0;
+            my $avgs_btc = $n ? sum(@btc)/$n : 0;
+            my $avgw_btc = $sumw ? sum(map {$btc[$_]*$weights[$_]} 0..$#weights)/$sumw : 0;
+
+            my $min_btc_bv  = min(@btc_bv) // 0;
+            my $max_btc_bv  = max(@btc_bv) // 0;
+            my $avgs_btc_bv = $n ? sum(@btc_bv)/$n : 0;
+            my $avgw_btc_bv = $sumw ? sum(map {$btc_bv[$_]*$weights[$_]} 0..$#weights)/$sumw : 0;
+
+            my $min_btc_mv  = min(@btc_mv) // 0;
+            my $max_btc_mv  = max(@btc_mv) // 0;
+            my $avgs_btc_mv = $n ? sum(@btc_mv)/$n : 0;
+            my $avgw_btc_mv = $sumw ? sum(map {$btc_mv[$_]*$weights[$_]} 0..$#weights)/$sumw : 0;
+
+            $sth_ins->execute(
+                $idx, $period->{Name},
+                $min_btc   , $max_btc   , $avgs_btc   , $avgw_btc   ,
+                $min_btc_bv, $max_btc_bv, $avgs_btc_bv, $avgw_btc_bv,
+                $min_btc_mv, $max_btc_mv, $avgs_btc_mv, $avgw_btc_mv,
+            );
+
+        } # for period
+    } #for user
+    $progress->finish;
+
+    [200];
+}
+
+Perinci::CmdLine::Any->new(
+    url => '/main/app',
+    log => 1,
+    log_level => 'debug',
+)->run;
