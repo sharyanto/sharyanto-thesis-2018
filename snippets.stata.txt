@@ -1,0 +1,136 @@
+* 2018-04-21
+
+insheet using "\\vboxsvr\usertmp\daily-survival.tsv"
+
+gen _return_x_tli = return * tli
+gen _percent_price_change_x_tli = percent_price_change * tli
+gen _pii_x_tli = pii * tli
+gen _pdi_x_tli = pdi * tli
+gen _avg_purchase_price_x_tli = avg_purchase_price * tli
+gen _avg_bal_btc_x_tli = avg_bal_btc * tli
+gen _avg_bal_btc_bv_x_tli = avg_bal_btc_bv * tli
+gen _avg_bal_btc_mv_x_tli = avg_bal_btc_mv * tli
+gen _trader_active_x_tli = trader_active * tli
+gen _trader_avg_bal_btc_bv_x_tli = trader_avg_bal_btc_bv * tli
+gen _trader_avg_trade_size_x_tli = trader_avg_trade_size * tli
+gen _trader_account_age_x_tli = trader_account_age * tli
+
+gen _return_x_tgi = return * tgi
+gen _percent_price_change_x_tgi = percent_price_change * tgi
+gen _pii_x_tgi = pii * tgi
+gen _pdi_x_tgi = pdi * tgi
+gen _avg_purchase_price_x_tgi = avg_purchase_price * tgi
+gen _avg_bal_btc_x_tgi = avg_bal_btc * tgi
+gen _avg_bal_btc_bv_x_tgi = avg_bal_btc_bv * tgi
+gen _avg_bal_btc_mv_x_tgi = avg_bal_btc_mv * tgi
+gen _trader_active_x_tgi = trader_active * tgi
+gen _trader_avg_bal_btc_bv_x_tgi = trader_avg_bal_btc_bv * tgi
+gen _trader_avg_trade_size_x_tgi = trader_avg_trade_size * tgi
+gen _trader_account_age_x_tgi = trader_account_age * tgi
+
+* period=all
+
+stset day,failure(sold)
+
+streg tli, dist(weibull)
+streg tgi, dist(weibull)
+streg return, dist(weibull)
+streg percent_price_change, dist(weibull)
+streg pii, dist(weibull)
+streg pdi, dist(weibull)
+streg avg_purchase_price, dist(weibull)
+streg avg_bal_btc, dist(weibull)
+streg avg_bal_btc_bv, dist(weibull)
+streg avg_bal_btc_mv, dist(weibull)
+streg trader_active, dist(weibull)
+streg trader_avg_bal_btc_bv, dist(weibull)
+streg trader_avg_trade_size, dist(weibull)
+streg trader_account_age, dist(weibull)
+streg _return_x_tli, dist(weibull)
+streg _percent_price_change_x_tli, dist(weibull)
+streg _pii_x_tli, dist(weibull)
+streg _pdi_x_tli, dist(weibull)
+streg _avg_purchase_price_x_tli, dist(weibull)
+streg _avg_bal_btc_x_tli, dist(weibull)
+streg _avg_bal_btc_bv_x_tli, dist(weibull)
+streg _avg_bal_btc_mv_x_tli, dist(weibull)
+streg _trader_active_x_tli, dist(weibull)
+streg _trader_avg_bal_btc_bv_x_tli, dist(weibull)
+streg _trader_avg_trade_size_x_tli, dist(weibull)
+streg _trader_account_age_x_tli, dist(weibull)
+streg _return_x_tgi, dist(weibull)
+streg _percent_price_change_x_tgi, dist(weibull)
+streg _pii_x_tgi, dist(weibull)
+streg _pdi_x_tgi, dist(weibull)
+streg _avg_purchase_price_x_tgi, dist(weibull)
+streg _avg_bal_btc_x_tgi, dist(weibull)
+streg _avg_bal_btc_bv_x_tgi, dist(weibull)
+streg _avg_bal_btc_mv_x_tgi, dist(weibull)
+streg _trader_active_x_tgi, dist(weibull)
+streg _trader_avg_bal_btc_bv_x_tgi, dist(weibull)
+streg _trader_avg_trade_size_x_tgi, dist(weibull)
+streg _trader_account_age_x_tgi, dist(weibull)
+
+* period=bull1
+
+stset day,failure(sold) if(day<=68)
+
+streg tli, dist(weibull)
+streg tgi, dist(weibull)
+streg pii, dist(weibull)
+streg pdi, dist(weibull)
+streg trader_active, dist(weibull)
+streg _pii_x_tli, dist(weibull)
+streg _pdi_x_tli, dist(weibull)
+streg _trader_active_x_tli, dist(weibull)
+streg _pii_x_tgi, dist(weibull)
+streg _pdi_x_tgi, dist(weibull)
+streg _trader_active_x_tgi, dist(weibull)
+
+* period=bear1
+
+stset day,failure(sold) if(day>68&day<=232)
+
+streg tli, dist(weibull)
+streg tgi, dist(weibull)
+streg pii, dist(weibull)
+streg pdi, dist(weibull)
+streg trader_active, dist(weibull)
+streg _pii_x_tli, dist(weibull)
+streg _pdi_x_tli, dist(weibull)
+streg _trader_active_x_tli, dist(weibull)
+streg _pii_x_tgi, dist(weibull)
+streg _pdi_x_tgi, dist(weibull)
+streg _trader_active_x_tgi, dist(weibull)
+
+* period=bull2
+
+stset day,failure(sold) if(day>232)
+
+streg tli, dist(weibull)
+streg tgi, dist(weibull)
+streg pii, dist(weibull)
+streg pdi, dist(weibull)
+streg trader_active, dist(weibull)
+streg _pii_x_tli, dist(weibull)
+streg _pdi_x_tli, dist(weibull)
+streg _trader_active_x_tli, dist(weibull)
+streg _pii_x_tgi, dist(weibull)
+streg _pdi_x_tgi, dist(weibull)
+streg _trader_active_x_tgi, dist(weibull)
+
+* weekly survival, period=all
+
+stset week,failure(sold)
+
+streg tli, dist(weibull)
+streg tgi, dist(weibull)
+streg pii, dist(weibull)
+streg pdi, dist(weibull)
+streg trader_active, dist(weibull)
+streg _pii_x_tli, dist(weibull)
+streg _pdi_x_tli, dist(weibull)
+streg _trader_active_x_tli, dist(weibull)
+streg _pii_x_tgi, dist(weibull)
+streg _pdi_x_tgi, dist(weibull)
+streg _trader_active_x_tgi, dist(weibull)

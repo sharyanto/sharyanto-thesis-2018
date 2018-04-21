@@ -560,15 +560,15 @@ UPDATE _Weekly_Price_From_Price_Usd t1 SET
   ;
 
 -- daily average price change. see also: _Daily_Return table.
-CREATE TABLE _Daily_Price_Change (
-  Day INT NOT NULL PRIMARY KEY,
+CREATE TABLE _Weekly_Price_Change (
+  Week INT NOT NULL PRIMARY KEY,
   Percent_Change DOUBLE
 );
-INSERT INTO _Daily_Price_Change
+INSERT INTO _Weekly_Price_Change
   SELECT
-    Day,
-    (Average-(SELECT Average FROM _Daily_Price WHERE Day=p1.Day-1))/(SELECT Average FROM _Daily_Price WHERE Day=p1.Day-1)*100 `Percent_Change`
-  FROM _Daily_Price p1;
+    Week,
+    (Average-(SELECT Average FROM _Weekly_Price WHERE Week=p1.Week-1))/(SELECT Average FROM _Weekly_Price WHERE Week=p1.Week-1)*100 `Percent_Change`
+  FROM _Weekly_Price p1;
 
 
 
@@ -615,9 +615,10 @@ SELECT
  s.Avg_Balance_Bitcoins_Market_Value Avg_Bal_Btc_MV,
 
    -- non-time-varying
- IF(r.Percentile >= 90, 1, 0) Active, -- 1=within top 10% of trading activity, 0=no
- b.Average_Weighted_Bitcoins_Book_Value `Value`, -- in JPY
- FLOOR((1385855995 - UNIX_TIMESTAMP(t.First_Trade_Stamp))/86400) Account_Age -- proxied by first transaction date. in days before last day of sample period.
+ IF(r.Percentile >= 90, 1, 0) Trader_Active, -- 1=within top 10% of trading activity, 0=no
+ b.Average_Weighted_Bitcoins_Book_Value `Trader_Avg_Bal_Btc_BV`, -- in JPY
+ t.Trade_Volume_Jpy/t.Num_Trades `Trader_Avg_Trade_Size`, -- in JPY
+ FLOOR((1385855995 - UNIX_TIMESTAMP(t.First_Trade_Stamp))/86400) Trader_Account_Age -- proxied by first transaction date. in days before last day of sample period.
 
 FROM _Daily_Survival s
 LEFT JOIN _Trader_Balance b ON b.Period='all' AND s.`Index`=b.`Index`
@@ -626,4 +627,41 @@ LEFT JOIN _Daily_Price_Change p ON s.Day=p.Day
 LEFT JOIN _Trade2_By_Index t ON s.`Index`=t.`Index`
 ;
 
--- timing: took 20 mins on my laptop, 3029MB output
+-- timing: 20-30min on my ux305fa laptop
+-- timing:  on my core-i7 pc
+
+-- daily survival data to be entered into statistical analysis software
+
+SELECT
+ s.Week Week,
+ s.`Index` `Index`,
+ s.Sold Sold,       -- event variable
+
+ -- covariates
+
+   -- time-varying
+ s.TLI TLI, -- trading loss indicator, 0/1
+ s.TGI TGI, -- trading gain indicator, 0/1
+ COALESCE((s.Avg_Balance_Bitcoins_Market_Value-s.Avg_Balance_Bitcoins_Book_Value)/s.Avg_Balance_Bitcoins_Book_Value, 0) `Return`, -- current (unrealized) return
+ p.`Percent_Change` Percent_Price_Change,
+ IF(p.`Percent_Change` >  27.845, 1, 0) PII, -- price increase indicator, price this week increase more than this % compared to last week (top 10%)
+ IF(p.`Percent_Change` < -14.05 , 1, 0) PDI, -- price decrease indicator, price this week decrease more than this % compared to last week (bottom 10%)
+ s.Avg_Purchase_Price Avg_Purchase_Price,
+ s.Avg_Balance_Bitcoins Avg_Bal_Btc,
+ s.Avg_Balance_Bitcoins_Book_Value Avg_Bal_Btc_BV,
+ s.Avg_Balance_Bitcoins_Market_Value Avg_Bal_Btc_MV,
+
+   -- non-time-varying
+ IF(r.Percentile >= 90, 1, 0) Trader_Active, -- 1=within top 10% of trading activity, 0=no
+ b.Average_Weighted_Bitcoins_Book_Value `Trader_Avg_Bal_Btc_BV`, -- in JPY
+ t.Trade_Volume_Jpy/t.Num_Trades `Trader_Avg_Trade_Size`, -- in JPY
+ FLOOR((1385855995 - UNIX_TIMESTAMP(t.First_Trade_Stamp))/86400) Trader_Account_Age -- proxied by first transaction date. in days before last day of sample period.
+
+FROM _Weekly_Survival s
+LEFT JOIN _Trader_Balance b ON b.Period='all' AND s.`Index`=b.`Index`
+LEFT JOIN _Trader_Rank_By_Num_Trades r ON s.`Index`=r.`Index`
+LEFT JOIN _Weekly_Price_Change p ON s.Week=p.Week
+LEFT JOIN _Trade2_By_Index t ON s.`Index`=t.`Index`
+;
+
+-- timing: ~12min on my laptop, ~1.5min on my pc
