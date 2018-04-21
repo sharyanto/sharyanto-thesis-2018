@@ -570,14 +570,6 @@ INSERT INTO _Weekly_Price_Change
     (Average-(SELECT Average FROM _Weekly_Price WHERE Week=p1.Week-1))/(SELECT Average FROM _Weekly_Price WHERE Week=p1.Week-1)*100 `Percent_Change`
   FROM _Weekly_Price p1;
 
-
-
-
-
-
-
-
-
 -- calculate rank and percentile of trading activity
 --CREATE TABLE _Trader_Rank_By_Num_Trades (
 --  `Index` INT NOT NULL PRIMARY KEY,
@@ -627,10 +619,9 @@ LEFT JOIN _Daily_Price_Change p ON s.Day=p.Day
 LEFT JOIN _Trade2_By_Index t ON s.`Index`=t.`Index`
 ;
 
--- timing: 20-30min on my ux305fa laptop
--- timing:  on my core-i7 pc
+-- timing: took 20+ mins on my laptop, 5.xGB output
 
--- daily survival data to be entered into statistical analysis software
+-- weekly survival data to be entered into statistical analysis software
 
 SELECT
  s.Week Week,
@@ -665,3 +656,4 @@ LEFT JOIN _Trade2_By_Index t ON s.`Index`=t.`Index`
 ;
 
 -- timing: ~12min on my laptop, ~1.5min on my pc
+-- timing: took 5 mins on my laptop, 1636 MB output
