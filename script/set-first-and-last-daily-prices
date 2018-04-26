@@ -1,0 +1,99 @@
+#!/usr/bin/env perl
+
+use 5.010001;
+use strict;
+use warnings;
+use Log::ger;
+use FindBin '$Bin';
+
+use DBIx::Connect::MySQL;
+
+my $dbh = DBIx::Connect::MySQL->connect(
+    "dbi:mysql:database=mtgox", undef, undef, {RaiseError=>1});
+$dbh->do("SET time_zone = '+00:00'");
+
+Trade2: {
+    my @rows;
+    my $sth = $dbh->prepare("SELECT * FROM _Daily_Price_From_Trade2");
+    $sth->execute;
+
+    while (my $row = $sth->fetchrow_hashref) { push @rows, $row }
+
+    for my $row (@rows) {
+        my $row_first = $dbh->selectrow_hashref("SELECT *,UNIX_TIMESTAMP(Stamp) Stamp_Unix From _Trade2 WHERE Bitcoins<>0 AND Stamp BETWEEN FROM_UNIXTIME(".($row->{Begin_Stamp_Unix}).") AND FROM_UNIXTIME(".($row->{Begin_Stamp_Unix} + 4*3600).") ORDER BY ABS(".($row->{Begin_Stamp_Unix})." - UNIX_TIMESTAMP(Stamp)) LIMIT 1");
+        $dbh->do("UPDATE _Daily_Price_From_Trade2 SET First=?,First_Stamp=?,First_Stamp_Unix=? WHERE Day=?", {},
+                 $row_first ? $row_first->{Money_Jpy}/$row_first->{Bitcoins} : undef,
+                 $row_first ? $row_first->{Stamp} : undef,
+                 $row_first ? $row_first->{Stamp_Unix} : undef,
+                 $row->{Day},
+             );
+
+        my $row_last = $dbh->selectrow_hashref("SELECT *,UNIX_TIMESTAMP(Stamp) Stamp_Unix From _Trade2 WHERE Bitcoins<>0 AND Stamp BETWEEN FROM_UNIXTIME(".($row->{Begin_Stamp_Unix}+86400-1 -4*3600).") AND FROM_UNIXTIME(".($row->{Begin_Stamp_Unix} + 86400-1).") ORDER BY ABS(".($row->{Begin_Stamp_Unix}+86400-1)." - UNIX_TIMESTAMP(Stamp)) LIMIT 1");
+        $dbh->do("UPDATE _Daily_Price_From_Trade2 SET Last=?,Last_Stamp=?,Last_Stamp_Unix=? WHERE Day=?", {},
+                 $row_last ? $row_last->{Money_Jpy}/$row_last->{Bitcoins} : undef,
+                 $row_last ? $row_last->{Stamp} : undef,
+                 $row_last ? $row_last->{Stamp_Unix} : undef,
+                 $row->{Day},
+             );
+    }
+}
+
+JPY: {
+    last;
+    my @rows;
+    my $sth = $dbh->prepare("SELECT * FROM _Daily_Price_From_Price_Jpy");
+    $sth->execute;
+
+    while (my $row = $sth->fetchrow_hashref) { push @rows, $row }
+
+    for my $row (@rows) {
+        my $row_first = $dbh->selectrow_hashref("SELECT *,UNIX_TIMESTAMP(Stamp) Stamp_Unix From Price WHERE Currency__='JPY' AND Stamp BETWEEN FROM_UNIXTIME(".($row->{Begin_Stamp_Unix}).") AND FROM_UNIXTIME(".($row->{Begin_Stamp_Unix} + 12*3600).") ORDER BY ABS(".($row->{Begin_Stamp_Unix})." - UNIX_TIMESTAMP(Stamp)) LIMIT 1");
+        $dbh->do("UPDATE _Daily_Price_From_Price_Jpy SET First=?,First_Stamp=?,First_Stamp_Unix=? WHERE Day=?", {},
+                 $row_first ? $row_first->{Price} : undef,
+                 $row_first ? $row_first->{Stamp} : undef,
+                 $row_first ? $row_first->{Stamp_Unix} : undef,
+                 $row->{Day},
+             );
+
+        my $row_last = $dbh->selectrow_hashref("SELECT *,UNIX_TIMESTAMP(Stamp) Stamp_Unix From Price WHERE Currency__='JPY' AND Stamp BETWEEN FROM_UNIXTIME(".($row->{Begin_Stamp_Unix}+86400-1 -12*3600).") AND FROM_UNIXTIME(".($row->{Begin_Stamp_Unix} + 86400-1).") ORDER BY ABS(".($row->{Begin_Stamp_Unix}+86400-1)." - UNIX_TIMESTAMP(Stamp)) LIMIT 1");
+        $dbh->do("UPDATE _Daily_Price_From_Price_Jpy SET Last=?,Last_Stamp=?,Last_Stamp_Unix=? WHERE Day=?", {},
+                 $row_last ? $row_last->{Price} : undef,
+                 $row_last ? $row_last->{Stamp} : undef,
+                 $row_last ? $row_last->{Stamp_Unix} : undef,
+                 $row->{Day},
+             );
+    }
+}
+
+USD: {
+    my @rows;
+    my $sth = $dbh->prepare("SELECT * FROM _Daily_Price_From_Price_Usd");
+    $sth->execute;
+
+    while (my $row = $sth->fetchrow_hashref) { push @rows, $row }
+
+    for my $row (@rows) {
+        my $row_first = $dbh->selectrow_hashref("SELECT *,UNIX_TIMESTAMP(Stamp) Stamp_Unix From Price WHERE Currency__='USD' AND Stamp BETWEEN FROM_UNIXTIME(".($row->{Begin_Stamp_Unix}).") AND FROM_UNIXTIME(".($row->{Begin_Stamp_Unix} + 12*3600).") ORDER BY ABS(".($row->{Begin_Stamp_Unix})." - UNIX_TIMESTAMP(Stamp)) LIMIT 1");
+        $dbh->do("UPDATE _Daily_Price_From_Price_Usd SET First=?,First_Stamp=?,First_Stamp_Unix=? WHERE Day=?", {},
+                 $row_first ? $row_first->{Price} : undef,
+                 $row_first ? $row_first->{Stamp} : undef,
+                 $row_first ? $row_first->{Stamp_Unix} : undef,
+                 $row->{Day},
+             );
+
+        my $row_last = $dbh->selectrow_hashref("SELECT *,UNIX_TIMESTAMP(Stamp) Stamp_Unix From Price WHERE Currency__='USD' AND Stamp BETWEEN FROM_UNIXTIME(".($row->{Begin_Stamp_Unix}+86400-1 -12*3600).") AND FROM_UNIXTIME(".($row->{Begin_Stamp_Unix} + 86400-1).") ORDER BY ABS(".($row->{Begin_Stamp_Unix}+86400-1)." - UNIX_TIMESTAMP(Stamp)) LIMIT 1");
+        $dbh->do("UPDATE _Daily_Price_From_Price_Usd SET Last=?,Last_Stamp=?,Last_Stamp_Unix=? WHERE Day=?", {},
+                 $row_last ? $row_last->{Price} : undef,
+                 $row_last ? $row_last->{Stamp} : undef,
+                 $row_last ? $row_last->{Stamp_Unix} : undef,
+                 $row->{Day},
+             );
+    }
+
+    $dbh->do(<<'_');
+UPDATE _Daily_Price_From_Price_Usd t1 SET
+  First       =First       *(SELECT Price FROM Fxrate t2 WHERE Currency1='USD' AND Currency2='JPY' ORDER BY ABS(DATEDIFF(t1.Begin_Stamp, t2.Stamp)) LIMIT 1),
+  Last        =Last        *(SELECT Price FROM Fxrate t2 WHERE Currency1='USD' AND Currency2='JPY' ORDER BY ABS(DATEDIFF(t1.Begin_Stamp, t2.Stamp)) LIMIT 1)
+_
+
+}

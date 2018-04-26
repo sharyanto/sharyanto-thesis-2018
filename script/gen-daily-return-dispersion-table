@@ -1,0 +1,98 @@
+#!/usr/bin/env perl
+
+# Before running this script, you have to already run the extra.sql and
+# extra-herding.sql.
+
+use 5.010001;
+use strict;
+use warnings;
+use FindBin '$Bin';
+use Log::ger;
+
+use DBIx::Connect::MySQL;
+use Progress::Any::Output 'TermProgressBarColor';
+use Progress::Any '$progress';
+
+my $dbh = DBIx::Connect::MySQL->connect(
+    "dbi:mysql:database=mtgox", undef, undef, {RaiseError=>1});
+$dbh->do("SET time_zone = '+00:00'");
+
+# create the table
+
+$dbh->do(<<'_');
+CREATE TABLE _Daily_Return_Dispersion (
+  Period VARCHAR(32) NOT NULL,
+  Day INT NOT NULL, Index(Day),
+  UNIQUE(Period, Day),
+  Avg_Return DOUBLE,
+  CSSD DOUBLE,
+  CSAD DOUBLE
+)
+_
+
+# populate and calculate the average return
+
+$dbh->do(<<'_');
+INSERT INTO _Daily_Return_Dispersion
+  SELECT 'all2', Day, AVG(`Return`), NULL, NULL
+  FROM _Trader_Daily_Return
+  WHERE
+     `Return` IS NOT NULL AND
+     (Day BETWEEN (SELECT Begin_Day FROM _Daily_Return_Dispersion_Period WHERE Name='all2') AND (SELECT End_Day FROM _Daily_Return_Dispersion_Period WHERE Name='all2')) AND
+    `Index` IN (SELECT `Index` FROM _Daily_Return_Dispersion_Participant WHERE Period='all2')
+  GROUP BY Day;
+_
+
+$dbh->do(<<'_');
+INSERT INTO _Daily_Return_Dispersion
+  SELECT 'bear1', Day, AVG(`Return`), NULL, NULL
+  FROM _Trader_Daily_Return
+  WHERE
+     `Return` IS NOT NULL AND
+     (Day BETWEEN (SELECT Begin_Day FROM _Daily_Return_Dispersion_Period WHERE Name='bear1') AND (SELECT End_Day FROM _Daily_Return_Dispersion_Period WHERE Name='bear1')) AND
+    `Index` IN (SELECT `Index` FROM _Daily_Return_Dispersion_Participant WHERE Period='bear1')
+  GROUP BY Day;
+_
+
+$dbh->do(<<'_');
+INSERT INTO _Daily_Return_Dispersion
+  SELECT 'bull2', Day, AVG(`Return`), NULL, NULL
+  FROM _Trader_Daily_Return
+  WHERE
+     `Return` IS NOT NULL AND
+     (Day BETWEEN (SELECT Begin_Day FROM _Daily_Return_Dispersion_Period WHERE Name='bull2') AND (SELECT End_Day FROM _Daily_Return_Dispersion_Period WHERE Name='bull2')) AND
+    `Index` IN (SELECT `Index` FROM _Daily_Return_Dispersion_Participant WHERE Period='bull2')
+  GROUP BY Day;
+
+_
+
+
+# calculate CSAD & CSSD
+
+my @periods;
+{
+    my $sth = $dbh->prepare("SELECT DISTINCT(Period) FROM _Daily_Return_Dispersion");
+    $sth->execute;
+    while (my @row = $sth->fetchrow_array) {
+        push @periods, $row[0];
+    }
+}
+
+$progress->target(scalar @periods);
+for my $i (0..$#periods) {
+    my $period = $periods[$i];
+    $progress->update(pos => $i, message => "Period $period");
+    my ($begin_day, $end_day) = $dbh->selectrow_array("SELECT MIN(Day), MAX(Day) FROM _Daily_Return_Dispersion WHERE Period='$period'");
+    my ($n) = $dbh->selectrow_array("SELECT COUNT(*) FROM _Daily_Return_Dispersion_Participant WHERE Period='$period'");
+    for my $day ($begin_day .. $end_day) {
+        $progress->update(
+            pos => $i+($day-$begin_day)/($end_day-$begin_day+1),
+            message => "Period $period, Day $day",
+        );
+
+        my ($avg) = $dbh->selectrow_array("SELECT Avg_Return FROM _Daily_Return_Dispersion WHERE Period='$period' AND Day=$day");
+        my ($csad, $cssd) = $dbh->selectrow_array("SELECT SUM(ABS(`Return` - $avg))/$n CSAD, SUM(POWER((`Return` - $avg), 2))/($n-1) CSSD FROM _Trader_Daily_Return WHERE Day=$day AND `Index` IN (SELECT `Index` FROM _Daily_Return_Dispersion_Participant WHERE PERIOD='$period')");
+        $dbh->do("UPDATE _Daily_Return_Dispersion SET Avg_Return=$avg,CSAD=$csad,CSSD=$cssd WHERE Period='$period' AND Day=$day");
+    }
+}
+$progress->finish;

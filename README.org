@@ -1,9 +1,8 @@
 * About this document
 
-This document is written in Org format. To view this properly, use Emacs (with
-org-mode installed) or view it on GitHub, or use other suitable viewers.
-However, much like Markdown, this document is quite readable in plain text. See
-https://orgmode.org for more details.
+This document is written in Org format. You can view this document in Emacs
+(with org-mode installed) or on GitHub. Much like Markdown, this document is
+also quite readable in plain text. See https://orgmode.org for more details.
 
 * About this repository
 

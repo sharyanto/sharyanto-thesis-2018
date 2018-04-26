@@ -1,0 +1,54 @@
+#!/usr/bin/env perl
+
+# before running this script, you have to run gen-trader-daily-return-table.
+
+use 5.010001;
+use strict;
+use warnings;
+use FindBin '$Bin';
+use Log::ger;
+#use Log::ger::DBI::Query;
+
+use DBIx::Connect::MySQL;
+use List::Util qw(reduce);
+
+my $dbh = DBIx::Connect::MySQL->connect(
+    "dbi:mysql:database=mtgox", undef, undef, {RaiseError=>1});
+$dbh->do("SET time_zone = '+00:00'");
+
+log_info "1. Creating table ...";
+$dbh->do("
+CREATE TABLE _Trader_Weekly_Return (
+  `Index` INT NOT NULL,
+  Week INT NOT NULL, -- week after sample period 0, 1, ...
+  INDEX(Week),
+  UNIQUE(`Index`,Week),
+
+  `Return` DOUBLE
+
+) ENGINE='MyISAM';
+");
+
+my @users;
+my $sth = $dbh->prepare("SELECT DISTINCT `Index` FROM _Trader_Daily_Return");
+$sth->execute;
+while (my $row = $sth->fetchrow_arrayref) {
+    push @users, $row->[0];
+}
+
+my $sth_insert = $dbh->prepare("INSERT INTO _Trader_Weekly_Return (`Index`,Week,`Return`) VALUES (?,?,?)");
+
+for my $idx (@users) {
+    my %returns; # key=week
+    my $sth = $dbh->prepare("SELECT `Return`,FLOOR(Day/7) Week FROM _Trader_Daily_Return WHERE `Index`=$idx ORDER BY Day");
+    $sth->execute;
+    while (my $row = $sth->fetchrow_hashref) {
+        $returns{ $row->{Week} } //= [];
+        push @{ $returns{ $row->{Week} } }, $row->{Return};
+    }
+
+    for my $week (sort {$a<=>$b} keys %returns) {
+        my $return = reduce { (1+$a)*(1+$b) - 1 } @{ $returns{$week} };
+        $sth_insert->execute($idx, $week, $return);
+    }
+}

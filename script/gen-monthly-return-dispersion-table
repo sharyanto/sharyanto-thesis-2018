@@ -1,0 +1,86 @@
+#!/usr/bin/env perl
+
+# Before running this script, you have to already run gen-trader-monthly-return.
+
+use 5.010001;
+use strict;
+use warnings;
+use FindBin '$Bin';
+use Log::ger;
+
+use DBIx::Connect::MySQL;
+use Progress::Any::Output 'TermProgressBarColor';
+use Progress::Any '$progress';
+
+my $dbh = DBIx::Connect::MySQL->connect(
+    "dbi:mysql:database=mtgox", undef, undef, {RaiseError=>1});
+$dbh->do("SET time_zone = '+00:00'");
+
+# create the table
+
+$dbh->do(<<'_');
+CREATE TABLE _Monthly_Return_Dispersion (
+  Period VARCHAR(32) NOT NULL,
+  Month INT NOT NULL, INDEX(Month),
+  UNIQUE(Period, Month),
+  Avg_Return DOUBLE,
+  CSAD DOUBLE,
+  CSSD DOUBLE
+)
+_
+
+# populate and calculate the average return
+
+$dbh->do(<<'_');
+INSERT INTO _Monthly_Return_Dispersion
+  SELECT 'all2', Month, AVG(`Return`), NULL, NULL
+  FROM _Trader_Monthly_Return
+  WHERE
+     `Return` IS NOT NULL AND
+     (Month BETWEEN (SELECT PERIOD_DIFF(DATE_FORMAT(DATE_ADD('2011-04-01', INTERVAL `Begin_Day` DAY), '%Y%m'), '201104') FROM _Daily_Return_Dispersion_Period WHERE Name='all2') AND
+                    (SELECT PERIOD_DIFF(DATE_FORMAT(DATE_ADD('2011-04-01', INTERVAL `End_Day`   DAY), '%Y%m'), '201104') FROM _Daily_Return_Dispersion_Period WHERE Name='all2')) AND
+    `Index` IN (SELECT `Index` FROM _Daily_Return_Dispersion_Participant WHERE Period='all2')
+  GROUP BY Month;
+_
+
+$dbh->do(<<'_');
+INSERT INTO _Monthly_Return_Dispersion
+  SELECT 'bull2', Month, AVG(`Return`), NULL, NULL
+  FROM _Trader_Monthly_Return
+  WHERE
+     `Return` IS NOT NULL AND
+     (Month BETWEEN (SELECT PERIOD_DIFF(DATE_FORMAT(DATE_ADD('2011-04-01', INTERVAL `Begin_Day` DAY), '%Y%m'), '201104') FROM _Daily_Return_Dispersion_Period WHERE Name='bull2') AND
+                    (SELECT PERIOD_DIFF(DATE_FORMAT(DATE_ADD('2011-04-01', INTERVAL `End_Day`   DAY), '%Y%m'), '201104') FROM _Daily_Return_Dispersion_Period WHERE Name='bull2')) AND
+    `Index` IN (SELECT `Index` FROM _Daily_Return_Dispersion_Participant WHERE Period='bull2')
+  GROUP BY Month;
+_
+
+# calculate CSAD & CSSD
+
+my @periods;
+{
+    my $sth = $dbh->prepare("SELECT DISTINCT(Period) FROM _Monthly_Return_Dispersion");
+    $sth->execute;
+    while (my @row = $sth->fetchrow_array) {
+        push @periods, $row[0];
+    }
+}
+
+$progress->target(scalar @periods);
+for my $i (0..$#periods) {
+    my $period = $periods[$i];
+    $progress->update(pos => $i, message => "Period $period");
+    my ($begin_month, $end_month) = $dbh->selectrow_array("SELECT MIN(Month), MAX(Month) FROM _Monthly_Return_Dispersion WHERE Period='$period'");
+    my ($n) = $dbh->selectrow_array("SELECT COUNT(*) FROM _Daily_Return_Dispersion_Participant WHERE Period='$period'");
+    for my $month ($begin_month .. $end_month) {
+        $progress->update(
+            pos => $i+($month-$begin_month)/($end_month-$begin_month+1),
+            message => "Period $period, Month $month",
+        );
+
+        my ($avg) = $dbh->selectrow_array("SELECT Avg_Return FROM _Monthly_Return_Dispersion WHERE Period='$period' AND Month=$month");
+        my ($csad, $cssd) = $dbh->selectrow_array("SELECT SUM(ABS(`Return` - $avg))/$n CSAD, SUM(POWER((`Return` - $avg), 2))/($n-1) CSSD FROM _Trader_Monthly_Return WHERE Month=$month AND `Index` IN (SELECT `Index` FROM _Daily_Return_Dispersion_Participant WHERE PERIOD='$period')");
+        $dbh->do("UPDATE _Monthly_Return_Dispersion SET Avg_Return=$avg,CSAD=$csad,CSSD=$cssd WHERE Period='$period' AND Month=$month");
+    }
+}
+$progress->finish;

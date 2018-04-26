@@ -1,0 +1,54 @@
+#!/usr/bin/env perl
+
+# before running this script, you have to run gen-trader-daily-return-table.
+
+use 5.010001;
+use strict;
+use warnings;
+use FindBin '$Bin';
+use Log::ger;
+#use Log::ger::DBI::Query;
+
+use DBIx::Connect::MySQL;
+use List::Util qw(reduce);
+
+my $dbh = DBIx::Connect::MySQL->connect(
+    "dbi:mysql:database=mtgox", undef, undef, {RaiseError=>1});
+$dbh->do("SET time_zone = '+00:00'");
+
+log_info "1. Creating table ...";
+$dbh->do("
+CREATE TABLE _Trader_Monthly_Return (
+  `Index` INT NOT NULL,
+  Month INT NOT NULL, -- month after 2011-04-01
+  INDEX(Month),
+  UNIQUE(`Index`,Month),
+
+  `Return` DOUBLE
+
+) ENGINE='MyISAM';
+");
+
+my @users;
+my $sth = $dbh->prepare("SELECT DISTINCT `Index` FROM _Trader_Daily_Return");
+$sth->execute;
+while (my $row = $sth->fetchrow_arrayref) {
+    push @users, $row->[0];
+}
+
+my $sth_insert = $dbh->prepare("INSERT INTO _Trader_Monthly_Return (`Index`,Month,`Return`) VALUES (?,?,?)");
+
+for my $idx (@users) {
+    my %returns; # key=month
+    my $sth = $dbh->prepare("SELECT `Return`,PERIOD_DIFF(DATE_FORMAT(DATE_ADD('2011-04-01', INTERVAL `Day` DAY), '%Y%m'), '201104') Month FROM _Trader_Daily_Return WHERE `Index`=$idx ORDER BY Day");
+    $sth->execute;
+    while (my $row = $sth->fetchrow_hashref) {
+        $returns{ $row->{Month} } //= [];
+        push @{ $returns{ $row->{Month} } }, $row->{Return};
+    }
+
+    for my $month (sort {$a<=>$b} keys %returns) {
+        my $return = reduce { (1+$a)*(1+$b) - 1 } @{ $returns{$month} };
+        $sth_insert->execute($idx, $month, $return);
+    }
+}

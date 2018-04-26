@@ -5,10 +5,13 @@ use strict;
 use warnings;
 use FindBin '$Bin';
 use Log::ger;
+#use Log::ger::Level::trace;
+#use Log::ger::Output 'Screen';
 #use Log::ger::DBI::Query;
 
 use DateTime;
 use DBIx::Connect::MySQL;
+use List::Util qw(reduce);
 
 my $dbh = DBIx::Connect::MySQL->connect(
     "dbi:mysql:database=mtgox", undef, undef, {RaiseError=>1});
@@ -19,7 +22,13 @@ CREATE TABLE IF NOT EXISTS _Daily_Price (
   Day INT NOT NULL PRIMARY KEY,
   Average DOUBLE NOT NULL,
   Lowest DOUBLE NOT NULL,
-  Highest DOUBLE NOT NULL
+  Highest DOUBLE NOT NULL,
+  First DOUBLE,
+  First_Stamp DATETIME,
+  First_Stamp_Unix DOUBLE,
+  Last DOUBLE,
+  Last_Stamp DATETIME,
+  Last_Stamp_Unix DOUBLE
 ) ENGINE='MyISAM';
 ");
 
@@ -37,40 +46,105 @@ my $num_days = int(($dt2->epoch - $dt1_bod->epoch)/86400);
 my %avg_prices;
 my %lowest_prices;
 my %highest_prices;
+my %firsts;
+my %lasts;
 {
     my $sth;
 
     my %avg_prices_from_price_usd;
     my %highest_prices_from_price_usd;
     my %lowest_prices_from_price_usd;
-    $sth = $dbh->prepare("SELECT Day,Average_Simple,Highest,Lowest FROM _Daily_Price_From_Price_Usd");
+    my %first_prices_from_price_usd;
+    my %first_stamps_from_price_usd;
+    my %first_stamp_unixes_from_price_usd;
+    my %last_prices_from_price_usd;
+    my %last_stamps_from_price_usd;
+    my %last_stamp_unixes_from_price_usd;
+    $sth = $dbh->prepare(<<'_');
+SELECT
+  Day, -- 0
+  Average_Simple,Highest,Lowest, -- 1,2,3
+  First,First_Stamp,First_Stamp_Unix, -- 4,5,6
+  Last ,Last_Stamp ,Last_Stamp_Unix   -- 7,8,9
+FROM _Daily_Price_From_Price_Usd
+_
     $sth->execute;
     while (my @row = $sth->fetchrow_array) {
         $avg_prices_from_price_usd{$row[0]}     = $row[1];
         $highest_prices_from_price_usd{$row[0]} = $row[2];
         $lowest_prices_from_price_usd{$row[0]}  = $row[3];
+
+        $first_prices_from_price_usd{$row[0]}       = $row[4];
+        $first_stamps_from_price_usd{$row[0]}       = $row[5];
+        $first_stamp_unixes_from_price_usd{$row[0]} = $row[6];
+
+        $last_prices_from_price_usd{$row[0]}        = $row[7];
+        $last_stamps_from_price_usd{$row[0]}        = $row[8];
+        $last_stamp_unixes_from_price_usd{$row[0]}  = $row[9];
     }
 
     my %avg_prices_from_price_jpy;
     my %highest_prices_from_price_jpy;
     my %lowest_prices_from_price_jpy;
-    $sth = $dbh->prepare("SELECT Day,Average_Simple,Highest,Lowest FROM _Daily_Price_From_Price_Jpy");
+    my %first_prices_from_price_jpy;
+    my %first_stamps_from_price_jpy;
+    my %first_stamp_unixes_from_price_jpy;
+    my %last_prices_from_price_jpy;
+    my %last_stamps_from_price_jpy;
+    my %last_stamp_unixes_from_price_jpy;
+    $sth = $dbh->prepare(<<'_');
+SELECT
+  Day, -- 0
+  Average_Simple,Highest,Lowest, -- 1,2,3
+  First,First_Stamp,First_Stamp_Unix, -- 4,5,6
+  Last ,Last_Stamp ,Last_Stamp_Unix   -- 7,8,9
+FROM _Daily_Price_From_Price_Jpy
+_
     $sth->execute;
     while (my @row = $sth->fetchrow_array) {
         $avg_prices_from_price_jpy{$row[0]}     = $row[1];
         $highest_prices_from_price_jpy{$row[0]} = $row[2];
         $lowest_prices_from_price_jpy{$row[0]}  = $row[3];
+
+        $first_prices_from_price_jpy{$row[0]}       = $row[4];
+        $first_stamps_from_price_jpy{$row[0]}       = $row[5];
+        $first_stamp_unixes_from_price_jpy{$row[0]} = $row[6];
+
+        $last_prices_from_price_jpy{$row[0]}        = $row[7];
+        $last_stamps_from_price_jpy{$row[0]}        = $row[8];
+        $last_stamp_unixes_from_price_jpy{$row[0]}  = $row[9];
     }
 
     my %avg_prices_from_trade2;
     my %highest_prices_from_trade2;
     my %lowest_prices_from_trade2;
-    $sth = $dbh->prepare("SELECT Day,Average_Weighted,Highest,Lowest FROM _Daily_Price_From_Trade2");
+    my %first_prices_from_trade2;
+    my %first_stamps_from_trade2;
+    my %first_stamp_unixes_from_trade2;
+    my %last_prices_from_trade2;
+    my %last_stamps_from_trade2;
+    my %last_stamp_unixes_from_trade2;
+    $sth = $dbh->prepare(<<'_');
+SELECT
+  Day, -- 0
+  Average_Weighted,Highest,Lowest, -- 1,2,3
+  First,First_Stamp,First_Stamp_Unix, -- 4,5,6
+  Last ,Last_Stamp ,Last_Stamp_Unix   -- 7,8,9
+FROM _Daily_Price_From_Trade2
+_
     $sth->execute;
     while (my @row = $sth->fetchrow_array) {
         $avg_prices_from_trade2{$row[0]}     = $row[1];
         $highest_prices_from_trade2{$row[0]} = $row[2];
         $lowest_prices_from_trade2{$row[0]}  = $row[3];
+
+        $first_prices_from_trade2{$row[0]}       = $row[4];
+        $first_stamps_from_trade2{$row[0]}       = $row[5];
+        $first_stamp_unixes_from_trade2{$row[0]} = $row[6];
+
+        $last_prices_from_trade2{$row[0]}        = $row[7];
+        $last_stamps_from_trade2{$row[0]}        = $row[8];
+        $last_stamp_unixes_from_trade2{$row[0]}  = $row[9];
     }
 
     for my $day (-1..$num_days+1) {
@@ -103,8 +177,39 @@ my %highest_prices;
         }
         $lowest_prices{$day} = $lowest;
 
-        $dbh->do("INSERT INTO _Daily_Price (Day,Average,Lowest,Highest) VALUES (?,?,?,?)", {},
-                 $day, $avg, $lowest, $highest);
+        my @firsts = grep {defined} reduce { $a->[2] < $b->[2] ? $a : $b } grep {defined $_->[0]} (
+            [$first_prices_from_price_usd{$day}, $first_stamps_from_price_usd{$day}, $first_stamp_unixes_from_price_usd{$day}],
+            [$first_prices_from_price_jpy{$day}, $first_stamps_from_price_usd{$day}, $first_stamp_unixes_from_price_jpy{$day}],
+            [$first_prices_from_trade2{$day}   , $first_stamps_from_trade2{$day}   , $first_stamp_unixes_from_trade2{$day}   ],
+        );
+        unless (@firsts) {
+            @firsts = (
+                [$avg, undef, $dt1_bod->epoch + $day*86400],
+            );
+        }
+
+        my @lasts  = grep {defined} reduce { $a->[2] > $b->[2] ? $a : $b } grep {defined $_->[0]} (
+            [$last_prices_from_price_usd{$day}, $last_stamps_from_price_usd{$day}, $last_stamp_unixes_from_price_usd{$day}],
+            [$last_prices_from_price_jpy{$day}, $last_stamps_from_price_usd{$day}, $last_stamp_unixes_from_price_jpy{$day}],
+            [$last_prices_from_trade2{$day}   , $last_stamps_from_trade2{$day}   , $last_stamp_unixes_from_trade2{$day}   ],
+        );
+        unless (@lasts) {
+            @lasts = (
+                [$avg, undef, $dt1_bod->epoch + $day*86400],
+            );
+        }
+
+        $dbh->do("INSERT INTO _Daily_Price (Day,Average,Lowest,Highest, First,First_Stamp,First_Stamp_Unix, Last,Last_Stamp,Last_Stamp_Unix) VALUES (?,?,?,?, ?,FROM_UNIXTIME(?),?, ?,FROM_UNIXTIME(?),?)", {},
+                 $day, $avg, $lowest, $highest,
+
+                 @firsts ? $firsts[0][0] : undef,
+                 @firsts ? $firsts[0][2] : undef,
+                 @firsts ? $firsts[0][2] : undef,
+
+                 @lasts ? $lasts[0][0] : undef,
+                 @lasts ? $lasts[0][2] : undef,
+                 @lasts ? $lasts[0][2] : undef,
+             );
     }
 
 } # getting daily price data

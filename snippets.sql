@@ -53,3 +53,26 @@ SELECT
   Day,`Index`,Sold,TLI,TGI,
   (SELECT MIN(Day) from _Survival WHERE `Index`=s1.`Index` AND Sold=1) dayfirstsold
 FROM _Survival s1 GROUP BY Day,`Index` HAVING Day<=dayfirstsold;
+
+-- herding
+
+-- period: all2
+-- criteria: 5%
+
+-- period: all2
+-- criteria: 1%
+
+-- period=bear1
+-- criteria: 5%
+
+-- period=bear1
+-- criteria: 1%
+
+-- period=bull2
+-- criteria: 5%
+
+-- period=bull2
+-- criteria: 1%
+
+SELECT
+  Day,

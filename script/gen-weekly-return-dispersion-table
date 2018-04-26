@@ -1,0 +1,84 @@
+#!/usr/bin/env perl
+
+# Before running this script, you have to already run gen-trader-weekly-return.
+
+use 5.010001;
+use strict;
+use warnings;
+use FindBin '$Bin';
+use Log::ger;
+
+use DBIx::Connect::MySQL;
+use Progress::Any::Output 'TermProgressBarColor';
+use Progress::Any '$progress';
+
+my $dbh = DBIx::Connect::MySQL->connect(
+    "dbi:mysql:database=mtgox", undef, undef, {RaiseError=>1});
+$dbh->do("SET time_zone = '+00:00'");
+
+# create the table
+
+$dbh->do(<<'_');
+CREATE TABLE _Weekly_Return_Dispersion (
+  Period VARCHAR(32) NOT NULL,
+  Week INT NOT NULL, INDEX(Week),
+  UNIQUE(Period, Week),
+  Avg_Return DOUBLE,
+  CSAD DOUBLE,
+  CSSD DOUBLE
+)
+_
+
+# populate and calculate the average return
+
+$dbh->do(<<'_');
+INSERT INTO _Weekly_Return_Dispersion
+  SELECT 'all2', Week, AVG(`Return`), NULL, NULL
+  FROM _Trader_Weekly_Return
+  WHERE
+     `Return` IS NOT NULL AND
+     (Week BETWEEN (SELECT FLOOR(Begin_Day/7) FROM _Daily_Return_Dispersion_Period WHERE Name='all2') AND (SELECT FLOOR(End_Day/7) FROM _Daily_Return_Dispersion_Period WHERE Name='all2')) AND
+    `Index` IN (SELECT `Index` FROM _Daily_Return_Dispersion_Participant WHERE Period='all2')
+  GROUP BY Week;
+_
+
+$dbh->do(<<'_');
+INSERT INTO _Weekly_Return_Dispersion
+  SELECT 'bull2', Week, AVG(`Return`), NULL, NULL
+  FROM _Trader_Weekly_Return
+  WHERE
+     `Return` IS NOT NULL AND
+     (Week BETWEEN (SELECT FLOOR(Begin_Day/7) FROM _Daily_Return_Dispersion_Period WHERE Name='bull2') AND (SELECT FLOOR(End_Day/7) FROM _Daily_Return_Dispersion_Period WHERE Name='bull2')) AND
+    `Index` IN (SELECT `Index` FROM _Daily_Return_Dispersion_Participant WHERE Period='bull2')
+  GROUP BY Week;
+_
+
+# calculate CSAD
+
+my @periods;
+{
+    my $sth = $dbh->prepare("SELECT DISTINCT(Period) FROM _Weekly_Return_Dispersion");
+    $sth->execute;
+    while (my @row = $sth->fetchrow_array) {
+        push @periods, $row[0];
+    }
+}
+
+$progress->target(scalar @periods);
+for my $i (0..$#periods) {
+    my $period = $periods[$i];
+    $progress->update(pos => $i, message => "Period $period");
+    my ($begin_week, $end_week) = $dbh->selectrow_array("SELECT MIN(FLOOR(Day/7)), MAX(Floor(Day/7)) FROM _Daily_Return_Dispersion WHERE Period='$period'");
+    my ($n) = $dbh->selectrow_array("SELECT COUNT(*) FROM _Daily_Return_Dispersion_Participant WHERE Period='$period'");
+    for my $week ($begin_week .. $end_week) {
+        $progress->update(
+            pos => $i+($week-$begin_week)/($end_week-$begin_week+1),
+            message => "Period $period, Week $week",
+        );
+
+        my ($avg) = $dbh->selectrow_array("SELECT Avg_Return FROM _Weekly_Return_Dispersion WHERE Period='$period' AND Week=$week");
+        my ($csad, $cssd) = $dbh->selectrow_array("SELECT SUM(ABS(`Return` - $avg))/$n CSAD, SUM(POWER((`Return` - $avg), 2))/($n-1) CSSD FROM _Trader_Weekly_Return WHERE Week=$week AND `Index` IN (SELECT `Index` FROM _Daily_Return_Dispersion_Participant WHERE PERIOD='$period')");
+        $dbh->do("UPDATE _Weekly_Return_Dispersion SET Avg_Return=$avg,CSAD=$csad,CSSD=$cssd WHERE Period='$period' AND Week=$week");
+    }
+}
+$progress->finish;

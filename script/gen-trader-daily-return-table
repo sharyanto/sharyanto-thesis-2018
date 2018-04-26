@@ -1,0 +1,207 @@
+#!/usr/bin/env perl
+
+# before running this script, you have to run extra.sql first to create
+# _Daily_Return_Dispersion_Participant and _Daily_Return_Dispersion_Period
+# tables.
+
+use 5.010001;
+use strict;
+use warnings;
+use FindBin '$Bin';
+use Log::ger;
+#use Log::ger::DBI::Query;
+
+use DateTime;
+use DBIx::Connect::MySQL;
+use IPC::System::Options 'readpipe', -log=>1;
+use List::Util qw(sum);
+use Perinci::CmdLine::Any;
+use Progress::Any '$progress';
+use Progress::Any::Output 'TermProgressBarColor';
+
+our %SPEC;
+
+$SPEC{app} = {
+    v => 1.1,
+    args => {
+        include_users => {
+            summary => 'Only include specified user ID(s)',
+            'x.name.is_plural' => 1,
+            'x.name.singular' => 'include_user',
+            schema => ['array*', of=>'posint*', "x.perl.coerce_rules"=>["str_int_range_and_comma_sep"]],
+            tags => ['category:testing'],
+        },
+    },
+};
+sub app {
+    my %args = @_;
+
+    my $dbh = DBIx::Connect::MySQL->connect(
+        "dbi:mysql:database=mtgox", undef, undef, {RaiseError=>1});
+    $dbh->do("SET time_zone = '+00:00'");
+
+    log_info "1. Creating table ...";
+$dbh->do("
+CREATE TABLE IF NOT EXISTS _Trader_Daily_Return (
+  `Index` INT NOT NULL,
+  Day INT NOT NULL, -- day after beginning of sample period: 0, 1, ...
+  INDEX(Day),
+  UNIQUE(`Index`,Day),
+
+  `Return` DOUBLE
+
+) ENGINE='MyISAM';
+");
+
+    my ($t1, $t2) = $dbh->selectrow_array(<<'_');
+SELECT
+  UNIX_TIMESTAMP(MIN(Stamp)), UNIX_TIMESTAMP(MAX(Stamp))
+FROM _Trade2
+_
+    my $dt1 = DateTime->from_epoch(epoch => $t1, time_zone=>'UTC');
+    my $dt1_bod = $dt1->clone; $dt1_bod->set(hour=>0, minute=>0, second=>0);
+    my $dt2 = DateTime->from_epoch(epoch => $t2, time_zone=>'UTC');
+
+    log_info "2. Getting daily last prices ...";
+    my %last_prices;     # key=day (0, 1, ...)
+    {
+        my $sth = $dbh->prepare("SELECT Day,Last FROM _Daily_Price");
+        $sth->execute;
+        while (my @row = $sth->fetchrow_array) {
+            $last_prices{$row[0]}     = $row[1];
+        }
+    } # getting daily last price data
+
+    log_info "3. Getting list of users ...";
+    my %users; # key=Index, value=1
+    my %begin_stamps; # key=Index
+    my %end_stamps; # key=Index
+    my %begin_days; # key=Index
+    my %end_days; # key=Index
+    {
+        my $sth = $dbh->prepare(<<'_');
+SELECT
+  `Index`,
+  MIN(p.Begin_Stamp) Begin_Stamp, MIN(p.Begin_Day) Begin_Day,
+  MAX(p.End_Stamp)   End_Stamp  , MAX(p.End_Day)   End_Day
+FROM _Daily_Return_Dispersion_Participant t
+LEFT JOIN _Daily_Return_Dispersion_Period p ON t.Period=p.Name
+GROUP BY `Index`
+_
+        $sth->execute;
+        while (my $row = $sth->fetchrow_hashref) {
+            $users       { $row->{Index} } = 1;
+            $begin_stamps{ $row->{Index} } = $row->{Begin_Stamp};
+            $end_stamps  { $row->{Index} } = $row->{End_Stamp};
+            $begin_days  { $row->{Index} } = $row->{Begin_Day};
+            $end_days    { $row->{Index} } = $row->{End_Day};
+        }
+    }
+    if ($args{include_users} && @{$args{include_users}}) {
+        my %new_users;
+        for (@{$args{include_users}}) {
+            if ($users{$_}) {
+                $new_users{$_} = 1;
+            } else {
+                warn "User `$_` is not eligible";
+            }
+        }
+        %users = %new_users;
+    }
+
+    my $sth_insert = $dbh->prepare(<<'_');
+INSERT INTO _Trader_Daily_Return (
+  `Index`,Day,
+  `Return`
+)
+VALUES (
+  ?,?,
+  ?
+)
+_
+
+    log_info "4. Calculating for users ...";
+    $progress->target(scalar keys %users);
+    for my $idx (sort {$a <=> $b} keys %users) {
+        $progress->update(message => "Processing for user #$idx");
+
+        # get initial value
+        my $tx0 = $dbh->selectrow_hashref("SELECT *, UNIX_TIMESTAMP(Stamp) Stamp_Unix FROM _Trade2 WHERE `Index`=$idx AND Stamp < '$begin_stamps{$idx}' ORDER BY Stamp DESC,_rowid DESC LIMIT 1");
+
+         my $yesterday_balance_bitcoins = $tx0->{Balance_Bitcoins};
+         my $yesterday_value = $tx0->{Balance_Bitcoins} * $last_prices{ $begin_days{$idx} - 1 };
+         my $total_sells_until_yesterday = 0;
+
+        # get list of users transactions (excluding those before the first buy
+        # and "over-sell-offs") and group them by day
+        my %txs; # key=day, val=[\%tx1, \%tx2, ...]
+        my $sth = $dbh->prepare("SELECT *, UNIX_TIMESTAMP(Stamp) Stamp_Unix FROM _Trade2 WHERE `Index`=$idx AND Stamp BETWEEN '$begin_stamps{$idx}' AND '$end_stamps{$idx}' ORDER BY Stamp,_rowid");
+        $sth->execute;
+        while (my $row = $sth->fetchrow_hashref) {
+            my $day = int(($row->{Stamp_Unix} - $dt1_bod->epoch)/86400);
+            $txs{$day} //= [];
+            push @{ $txs{$day} }, $row;
+        }
+
+        #use DD; dd \%txs;
+
+      DAY:
+        for my $day ($begin_days{$idx} .. $end_days{$idx}) {
+            my $ts_bod = $dt1_bod->epoch + $day * 86400;
+
+            log_trace("Index#%-6d Day=%3d", $idx, $day);
+
+            my $today_balance_bitcoins;
+            my $today_buys = 0;
+            my $today_sells = 0;
+            if ($txs{$day}) {
+                for my $tx (@{ $txs{$day} }) {
+                    if ($tx->{Type} eq 'buy') {
+                        $today_buys  += $tx->{Money_Jpy};
+                    } else {
+                        $today_sells += $tx->{Money_Jpy} - $tx->{Money_Fee_Jpy};
+                    }
+                }
+                $today_balance_bitcoins    = $txs{$day}[-1]{Balance_Bitcoins};
+            } else {
+                $today_balance_bitcoins    = $yesterday_balance_bitcoins;
+            }
+
+          L1:
+
+            my $today_value = $today_balance_bitcoins * $last_prices{$day} + $total_sells_until_yesterday + $today_sells;
+            my $v1 = $today_value;
+            my $v0 = $yesterday_value + $today_buys;
+            my $return = ($v1 - $v0)/$v0;
+            log_trace("  Yesterday:(balance=%.3f, total sell=%.3f, value=%.3f)  Today:(balance=%.3f, lastprice=%.3f, buy=%.3f, sell=%.3f, value=%.3f)  Today's return: %.5f",
+                      $yesterday_balance_bitcoins,
+                      $total_sells_until_yesterday,
+                      $yesterday_value,
+                      $today_balance_bitcoins,
+                      $last_prices{$day},
+                      $today_buys,
+                      $today_sells,
+                      $today_value,
+                      $return,
+                  );
+            $sth_insert->execute(
+                $idx, $day,
+                $return,
+            );
+
+            $yesterday_balance_bitcoins   = $today_balance_bitcoins;
+            $yesterday_value              = $today_value;
+            $total_sells_until_yesterday += $today_sells;
+
+        } # for day
+    } # for user
+    $progress->finish;
+
+    [200, "OK"];
+}
+
+Perinci::CmdLine::Any->new(
+    url => '/main/app',
+    log => 1,
+    log_level => 'debug',
+)->run;

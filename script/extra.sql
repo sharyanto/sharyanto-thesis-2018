@@ -417,6 +417,12 @@ CREATE TABLE _Daily_Price_From_Price_Jpy (
   Highest DOUBLE NOT NULL, -- highest price of the day
   Lowest  DOUBLE NOT NULL, -- lowest price of the day
   Average_Simple DOUBLE NOT NULL, -- simple average price of the day
+  First   DOUBLE, -- closest to 00:00
+  First_Stamp DATETIME,
+  First_Stamp_Unix DOUBLE,
+  Last    DOUBLE, -- closest to 23:59
+  Last_Stamp DATETIME,
+  Last_Stamp_Unix DOUBLE,
   Num DOUBLE NOT NULL -- number of samples
 );
 INSERT INTO _Daily_Price_From_Price_Jpy
@@ -427,6 +433,12 @@ INSERT INTO _Daily_Price_From_Price_Jpy
     MAX(Price) Highest,
     MIN(Price) Lowest,
     AVG(Price) Average_Simple,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
     COUNT(*) Num
   FROM Price
   WHERE Currency__='JPY'
@@ -441,6 +453,12 @@ CREATE TABLE _Daily_Price_From_Price_Usd (
   Highest DOUBLE NOT NULL, -- highest price of the day
   Lowest  DOUBLE NOT NULL, -- lowest price of the day
   Average_Simple DOUBLE NOT NULL, -- simple average price of the day
+  First   DOUBLE, -- closest to 00:00
+  First_Stamp DATETIME,
+  First_Stamp_Unix DOUBLE,
+  Last    DOUBLE, -- closest to 23:59
+  Last_Stamp DATETIME,
+  Last_Stamp_Unix DOUBLE,
   Num DOUBLE NOT NULL -- number of samples
 );
 INSERT INTO _Daily_Price_From_Price_Usd
@@ -451,6 +469,12 @@ INSERT INTO _Daily_Price_From_Price_Usd
     MAX(Price) Highest,
     MIN(Price) Lowest,
     AVG(Price) Average_Simple,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
     COUNT(*) Num
   FROM Price
   WHERE Currency__='USD'
@@ -459,8 +483,7 @@ INSERT INTO _Daily_Price_From_Price_Usd
 UPDATE _Daily_Price_From_Price_Usd t1 SET
   Highest       =Highest       *(SELECT Price FROM Fxrate t2 WHERE Currency1='USD' AND Currency2='JPY' ORDER BY ABS(DATEDIFF(t1.Begin_Stamp, t2.Stamp)) LIMIT 1),
   Lowest        =Lowest        *(SELECT Price FROM Fxrate t2 WHERE Currency1='USD' AND Currency2='JPY' ORDER BY ABS(DATEDIFF(t1.Begin_Stamp, t2.Stamp)) LIMIT 1),
-  Average_Simple=Average_Simple*(SELECT Price FROM Fxrate t2 WHERE Currency1='USD' AND Currency2='JPY' ORDER BY ABS(DATEDIFF(t1.Begin_Stamp, t2.Stamp)) LIMIT 1)
-  ;
+  Average_Simple=Average_Simple*(SELECT Price FROM Fxrate t2 WHERE Currency1='USD' AND Currency2='JPY' ORDER BY ABS(DATEDIFF(t1.Begin_Stamp, t2.Stamp)) LIMIT 1),
 
 -- daily average price change. see also: _Daily_Return table.
 CREATE TABLE _Daily_Price_Change (
@@ -657,3 +680,7 @@ LEFT JOIN _Trade2_By_Index t ON s.`Index`=t.`Index`
 
 -- timing: ~12min on my laptop, ~1.5min on my pc
 -- timing: took 5 mins on my laptop, 1636 MB output
+
+CREATE INDEX _Round_Trip_Index ON _Round_Trip(`Index`);
+CREATE INDEX _Round_Trip_First_Tx_Stamp ON _Round_Trip(First_Tx_Stamp);
+CREATE INDEX _Round_Trip_Last_Tx_Stamp ON _Round_Trip(Last_Tx_Stamp);
